@@ -1,0 +1,55 @@
+int main() {
+    // переменные и арифметика
+    int x = 10;
+    int y = 3;
+    print(x + y);
+    print(x * y - 1);
+    print(x % y);
+
+    // строки
+    string hello = "Hello, ";
+    string world = "World!";
+    print(hello + world);
+
+    // булевы и сравнения
+    bool flag = true;
+    print(flag);
+    print(x > y);
+    print(x == 10);
+
+    // if/else
+    if (x > 5) {
+        print("x больше 5");
+    } else {
+        print("x <= 5");
+    }
+
+    // while + break
+    int i = 0;
+    while (i < 5) {
+        print(i);
+        i++;
+    }
+
+    // массивы
+    int arr = [10, 20, 30];
+    print(arr[0]);
+    print(arr[2]);
+    print(len(arr));
+
+    // вызов функции
+    int result = add(3, 4);
+    print(result);
+    print(add(4, 5));
+
+    // вложенный if
+    if (add(3, 4) == 7) {
+        print("add работает!");
+    }
+
+    return 0;
+}
+
+int add(int a, int b) {
+    return a + b;
+}
