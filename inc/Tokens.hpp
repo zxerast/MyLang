@@ -51,6 +51,9 @@ enum class TokenType {   // Тип токенов
     Break,
     Continue,
     Return,
+    Auto,
+    Import,
+    Export,
     End,
 };
 

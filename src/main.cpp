@@ -29,5 +29,5 @@ int main(int argc, char* argv[]){
         return 1;
     }
 
-    return interpret(*nodes);
+    return 0;
 }

@@ -49,17 +49,6 @@ std::expected<void, std::string> compile(Expr *head, std::ofstream &file){
     }
 
     if (auto *bin = dynamic_cast<Binary*>(head)){
-        // Присваивание: левый узел — Identifier, правый — выражение
-        if (bin->op == Operand::Equal){
-            auto res = compile(bin->right, file);
-            if (!res) return res;
-            file << "pop rax\n";
-            auto *id = dynamic_cast<Identifier*>(bin->left);
-            file << "mov [" << id->name << "], rax\n";
-            file << "push rax\n";  // присваивание возвращает значение
-            return {};
-        }
-
         auto resL = compile(bin->left, file);
         if (!resL) return resL;
         auto resR = compile(bin->right, file);

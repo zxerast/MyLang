@@ -29,7 +29,7 @@ struct Identifier : Expr{
 
 enum class Operand{
     Add, Sub, Mul, Div, Mod,
-    Equal, EqualEqual, NotEqual,
+    EqualEqual, NotEqual,
     Less, Greater, LessEqual, GreaterEqual,
     And, Or, Not,
     UnaryPlus, UnaryMinus,
@@ -121,10 +121,11 @@ struct ExprStmt : Stmt{
 };
 
 struct VarDecl : Stmt{
-    bool isConst;
-    std::string typeName;
+    bool isConst = false;
+    bool isAuto = false;
+    std::string typeName;   // пустая при isAuto == true
     std::string name;
-    Expr *init;
+    Expr *init = nullptr;
 };
 
 //  Объявления верхнего уровня 
@@ -161,7 +162,16 @@ struct NamespaceDecl : Stmt{
     std::vector<Stmt*> decls;
 };
 
+struct ImportDecl : Stmt{
+    std::string path;   // "math.lang"
+};
+
+struct ExportDecl : Stmt{
+    Stmt *decl;         // обёрнутое объявление
+};
+
 struct Program : ASTNode{
+    std::vector<Stmt*> imports;
     std::vector<Stmt*> decls;
 };
 
@@ -170,4 +180,3 @@ struct Program : ASTNode{
 std::expected<std::vector<Stmt*>, std::string> parse(const std::vector<Token>& source);
 std::expected<void, std::string> compile(Expr *head, std::ofstream &file);
 std::expected<void, std::string> generate(const std::vector<Expr*>& nodes, std::ofstream &file);
-int interpret(const std::vector<Stmt*>& decls);

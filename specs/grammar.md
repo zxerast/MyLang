@@ -8,7 +8,7 @@
 ( )     группировка
 [ ]     ноль или один раз (опционально)
 { }     ноль или более раз
-"x"     терминал (буквально)
+"x"     конкретный символ
 ```
 
 ---
@@ -65,6 +65,7 @@ bool_lit = "true" | "false"
 ```
 const | struct | type | namespace
 if | else | while | break | continue | return
+auto | import | export
 ```
 
 ### Имена типов (зарезервированы)
@@ -79,11 +80,11 @@ float32 | float64
 ### Операторы и разделители
 
 ```
-+   -   *   /   %   ++  --  ^
++   -   *   /   %   ++  --
 ==  !=  <   >   <=  >=
 &&  ||  !
 =
-.   ->
+.   ::
 (   )   {   }   [   ]
 ;   :   ,
 ```
@@ -95,38 +96,57 @@ float32 | float64
 ### Программа
 
 ```
-program = { top_decl }
+program = { import_decl } { top_decl }
+```
+
+### Импорт модулей
+
+```
+import_decl = "import" string_lit ";"
+```
+
+Импорт должен находиться в начале файла, до любых объявлений.
+
+Пример:
+```
+import "math.lang";
+import "utils.lang";
 ```
 
 ### Объявления верхнего уровня
 
 ```
-top_decl = var_decl
-         | func_decl
-         | struct_decl
-         | type_alias
-         | namespace_decl
+top_decl = [ "export" ] ( var_decl
+                        | func_decl
+                        | struct_decl
+                        | type_alias
+                        | namespace_decl )
 ```
+
+`export` делает объявление видимым для других модулей. Без `export` объявление доступно только внутри текущего файла.
 
 ### Объявление переменной
 
 ```
-var_decl = [ "const" ] type iden "=" expr ";"
+var_decl = [ "const" ] ( type | "auto" ) iden "=" expr ";"
 ```
+
+При использовании `auto` тип выводится из выражения инициализации. `auto` требует обязательного инициализатора.
 
 Примеры:
 ```
 int x = 5;
 const int MAX = 100;
 float ratio = 0.5;
+auto name = "hello";       // выведен тип string
+auto flag = x > 0;         // выведен тип bool
+const auto PI = 3.14;      // выведен тип float, переменная константна
 ```
 
 ### Объявление функции
 
 ```
-func_decl = type iden "(" [ param_list ] ")" block
-          | "void" iden "(" [ param_list ] ")" block
-
+func_decl = type iden "(" [ param_list ] ")" "{" block "}"  
 param_list = param { "," param }
 param      = type iden
 ```
@@ -186,6 +206,7 @@ namespace Math {
 ```
 type = builtin_type
      | array_type
+     | dyn_array_type
      | iden             (имя структуры или синонима типа)
 
 builtin_type = "int"   | "uint"   | "float" | "bool"
@@ -194,14 +215,17 @@ builtin_type = "int"   | "uint"   | "float" | "bool"
              | "uint8" | "uint16" | "uint32"| "uint64"
              | "float32" | "float64"
 
-array_type = "[" type ";" int_lit "]"
+array_type     = "[" type ";" int_lit "]"    (фиксированный массив)
+dyn_array_type = "[" type "]"                (динамический массив)
 ```
 
 Примеры типов:
 ```
 int
 float64
-[int; 10]
+[int; 10]       // фиксированный массив из 10 int
+[int]           // динамический массив int
+[string]        // динамический массив строк
 Point
 ```
 
@@ -219,7 +243,7 @@ stmt = var_decl
      | return_stmt
      | expr_stmt
      | ";"
-     | block
+     | "{" block "}"
 ```
 
 #### Присваивание
@@ -235,20 +259,20 @@ lvalue = iden
 #### Ветвление
 
 ```
-if_stmt = "if" expr block [ "else" ( if_stmt | block ) ]
+if_stmt = "if" "(" expr ")" "{" block "}" [ "else" ( if_stmt | block ) ]
 ```
 
 Примеры:
 ```
-if x > 0 { ... }
-if x > 0 { ... } else { ... }
-if x > 0 { ... } else if x < 0 { ... } else { ... }
+if (x > 0) { ... }
+if (x > 0) { ... } else { ... }
+if (x > 0) { ... } else if (x < 0) { ... } else { ... }
 ```
 
 #### Цикл
 
 ```
-while_stmt = "while" expr block
+while_stmt = "while" "(" expr ")" "{" block "}"
 ```
 
 #### Возврат
@@ -271,7 +295,7 @@ print(x);
 #### Блок
 
 ```
-block = "{" { stmt } "}"
+block = { stmt }
 ```
 
 ---
@@ -280,16 +304,16 @@ block = "{" { stmt } "}"
 
 Приоритет операторов (от низшего к высшему):
 
-| Уровень | Операторы | Ассоциативность |
-|---------|-----------|-----------------|
-| 1 | `\|\|` | левая |
-| 2 | `&&` | левая |
-| 3 | `==` `!=` | левая |
-| 4 | `<` `>` `<=` `>=` | левая |
-| 5 | `+` `-` | левая |
-| 6 | `*` `/` `%` | левая |
-| 7 | унарные `!` `-` | правая |
-| 8 | постфиксные `.` `[]` `()` | левая |
+| Уровень |                Операторы            | Ассоциативность |
+|---------|-------------------------------------|-----------------|
+|    1    |                  `\|\|`             |      левая      |
+|    2    |                   `&&`              |      левая      |
+|    3    |                `==` `!=`            |      левая      |
+|    4    |            `<` `>` `<=` `>=`        |      левая      |
+|    5    |                `+` `-`              |      левая      |
+|    6    |              `*` `/` `%`            |      левая      |
+|    7    |           унарные `!` `-`           |      правая     |
+|    8    | постфиксные `.` `[]` `()` `++` `--` |      левая      |
 
 ```
 expr     = or
@@ -300,15 +324,15 @@ compare  = add { ( "<" | ">" | "<=" | ">=" ) add }
 add      = mul { ( "+" | "-" ) mul }
 mul      = unary { ( "*" | "/" | "%" ) unary }
 unary    = ( "!" | "-" ) unary | postfix
-postfix  = primary { "." iden | "[" expr "]" | "(" [ arg_list ] ")" }
+postfix  = primary { "." iden | "[" expr "]" | "(" [ arg_list ] ")" | "++" | "--" }
 
 primary  = int_lit
          | float_lit
          | string_lit
          | bool_lit
-         | iden
-         | iden "::" iden                          (доступ к namespace)
-         | iden "{" [ field_init_list ] "}"        (литерал структуры)
+         | iden "::" iden                          (доступ к namespace — разрешается по "::" после iden)
+         | iden "{" [ field_init_list ] "}"        (литерал структуры — разрешается по "{" после iden)
+         | iden                                    (простой идентификатор — если после iden нет "::" и "{")
          | "[" [ expr { "," expr } ] "]"           (литерал массива)
          | "(" expr ")"
          | cast_expr

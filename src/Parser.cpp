@@ -18,7 +18,7 @@ struct Parser {
             return parseWhile();
         }
 
-        if (i < source.size() && (source[i].type == TokenType::TypeName || source[i].type == TokenType::Const)){
+        if (i < source.size() && (source[i].type == TokenType::TypeName || source[i].type == TokenType::Const || source[i].type == TokenType::Auto)){
             return parseVarDecl();
         }
 
@@ -51,14 +51,33 @@ struct Parser {
         }
 
         auto e = parseEquasion();
-        
+
         if (!e) return std::unexpected(e.error());
 
+        // присваивание: lvalue = expr ;
+        if (i < source.size() && source[i].type == TokenType::Equal){
+            i++; // съели '='
+
+            auto rhs = parseEquasion();
+            if (!rhs) return std::unexpected(rhs.error());
+
+            if (i >= source.size() || source[i].type != TokenType::Separator){
+                return std::unexpected("Ошибка парсера: ожидался ';' после присваивания");
+            }
+            i++;
+
+            auto *node = new Assign;
+            node->target = *e;
+            node->value = *rhs;
+            return node;
+        }
+
+        // выражение как инструкция: expr ;
         if (i >= source.size() || source[i].type != TokenType::Separator){
             return std::unexpected("Ошибка парсера: ожидался ';' после выражения");
         }
         i++;
-        
+
         auto *node = new ExprStmt;
         node->expr = *e;
         return node;
@@ -400,7 +419,37 @@ struct Parser {
         return parseVarDecl();
     }
 
+    std::expected<Stmt*, std::string> parseImportDecl(){
+        i++; // съели 'import'
+
+        if (i >= source.size() || source[i].type != TokenType::StringLit){
+            return std::unexpected("Ошибка парсера: ожидался путь к модулю после 'import'");
+        }
+
+        auto *node = new ImportDecl();
+        node->path = source[i++].lexeme;
+
+        if (i >= source.size() || source[i].type != TokenType::Separator){
+            delete node;
+            return std::unexpected("Ошибка парсера: ожидался ';' после import");
+        }
+        i++;
+
+        return node;
+    }
+
     std::expected<Stmt*, std::string> parseTopDecl(){
+        // export обёртка
+        if (i < source.size() && source[i].type == TokenType::Export){
+            i++; // съели 'export'
+
+            auto inner = parseTopDecl();
+            if (!inner) return inner;
+
+            auto *node = new ExportDecl();
+            node->decl = *inner;
+            return node;
+        }
         if (i < source.size() && source[i].type == TokenType::Struct){
             return parseStructDecl();
         }
@@ -409,6 +458,10 @@ struct Parser {
         }
         if (i < source.size() && source[i].type == TokenType::Namespace){
             return parseNamespaceDecl();
+        }
+        // auto → всегда переменная
+        if (i < source.size() && source[i].type == TokenType::Auto){
+            return parseVarDecl();
         }
         // var_decl или func_decl — оба начинаются с [const] type iden
         if (i < source.size() && (source[i].type == TokenType::TypeName || source[i].type == TokenType::Const)){
@@ -424,17 +477,21 @@ struct Parser {
     std::expected<Stmt*, std::string> parseVarDecl(){
         auto node = new VarDecl();
 
-        if (i < source.size() && (source[i].type == TokenType::Const)){
+        if (i < source.size() && source[i].type == TokenType::Const){
             i++;
             node->isConst = true;
         }
 
-        if (i < source.size() && (source[i].type == TokenType::TypeName || source[i].type == TokenType::Iden)){
+        if (i < source.size() && source[i].type == TokenType::Auto){
+            i++;
+            node->isAuto = true;
+        }
+        else if (i < source.size() && (source[i].type == TokenType::TypeName || source[i].type == TokenType::Iden)){
             node->typeName = source[i++].lexeme;
         }
         else {
             delete node;
-            return std::unexpected("Ошибка парсера: ожидалось имя типа в объявлении переменной");
+            return std::unexpected("Ошибка парсера: ожидалось имя типа или 'auto' в объявлении переменной");
         }
 
         if (i < source.size() && (source[i].type == TokenType::Iden)){
@@ -490,26 +547,7 @@ struct Parser {
     }
 
     std::expected<Expr*, std::string> parseEquasion() {
-        auto left = parseLogicOr();
-        if (!left) {
-            return std::unexpected(left.error());
-        }
-
-        if (i < source.size() && (source[i].type == TokenType::Equal)) {
-            i++;
-            auto right = parseEquasion();
-            
-            if (!right){
-                return std::unexpected(right.error());
-            }
-
-            auto *node = new Binary();
-            node->op = Operand::Equal;
-            node->left = *left;
-            node->right = *right;
-            return node;
-        }
-        return *left;
+        return parseLogicOr();
     }
 
     std::expected<Expr*, std::string> parseLogicOr(){

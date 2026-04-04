@@ -89,6 +89,15 @@ Token typeIdentifier(const std::string& elem){
     else if (elem == "cast"){
         return {TokenType::Cast, SubType::None, elem};
     }
+    else if (elem == "auto"){
+        return {TokenType::Auto, SubType::None, elem};
+    }
+    else if (elem == "import"){
+        return {TokenType::Import, SubType::None, elem};
+    }
+    else if (elem == "export"){
+        return {TokenType::Export, SubType::None, elem};
+    }
     else if (elem == "true" || elem == "false"){
         return {TokenType::BoolLit, SubType::None, elem};
     }
