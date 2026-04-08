@@ -871,6 +871,7 @@ struct Parser {
         // числовой литерал
         if (source[i].type == TokenType::Number){
             auto *node = new Number();
+            node->isFloat = (source[i].subType == SubType::Float);
             node->value = std::stod(source[i++].lexeme);
             return node;
         }

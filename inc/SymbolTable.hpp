@@ -5,6 +5,7 @@
 #include <vector>
 #include <unordered_map>
 #include <memory>
+#include <expected>
 
 enum class SymbolKind {
     Variable,
@@ -43,14 +44,61 @@ struct Scope {
     std::shared_ptr<Scope> parent = nullptr;    //  Ссылка на внешнюю область
 };
 
-// Объявления функций семантического анализатора (реализация в Semantic.cpp)
+class SymbolTable {
+    std::shared_ptr<Scope> current;     //      Указатель на текущую область видимости
+
+public:
+    SymbolTable() : current(std::make_shared<Scope>()) {}
+
+    void enterScope() {
+        auto inner = std::make_shared<Scope>();     //  Вошли в новую
+        inner->parent = current;    //  Ставим текущую как родителя
+        current = inner;
+    }
+
+    void exitScope() {
+        if (current->parent)
+            current = current->parent;
+    }
+
+    std::expected<void, std::string> declare(std::shared_ptr<Symbol> sym) {     // Объявляем символ в текущем scope
+        if (current->symbols.contains(sym->name))   // Возвращает ошибку если имя уже занято в этом же scope
+            return std::unexpected("'" + sym->name + "' is already declared in this scope");
+
+        current->symbols[sym->name] = sym;
+        return {};
+    }
+
+    std::shared_ptr<Symbol> resolve(const std::string& name) {
+        for (auto scope = current; scope != nullptr; scope = scope->parent) {
+            auto it = scope->symbols.find(name);    // Найти символ по имени, поднимаясь по цепочке scope
+            if (it != scope->symbols.end())
+                return it->second;
+        }
+        return nullptr;     // Если не найдём
+    }
+};
+
+// Семантический анализатор (реализация в Semantic.cpp)
 
 struct Program;
 struct Stmt;
 struct Expr;
 struct Block;
 
-void analyzeStmt(Stmt* stmt);      // Анализ одной инструкции
-void analyzeExpr(Expr* expr);      // Анализ одного выражения
-void analyzeBlock(Block* block);   // Анализ блока (вход/выход из scope)
-std::expected<void, std::string> analyze(Program* program);  // Точка входа
+class SemanticAnalyzer {
+    SymbolTable table;
+    std::vector<std::string> errors;
+    std::shared_ptr<Type> currentReturnType;  //  Тип возврата текущей функции (для проверки return)
+
+    void registerBuiltins();                                    //  Регистрация print, len, input, exit, panic
+    void collectTopLevel(const std::vector<Stmt*>& decls);      //  Первый проход — собираем имена top-level объявлений
+    std::shared_ptr<Type> resolveTypeName(const std::string& name);  //  Преобразование строки типа в Type
+
+    std::shared_ptr<Type> analyzeExpr(Expr* expr);  // Анализ выражения, возвращает его тип
+    void analyzeStmt(Stmt* stmt);                   // Анализ одной инструкции
+    void analyzeBlock(Block* block);                // Анализ блока (вход/выход из scope)
+
+public:
+    std::expected<void, std::string> analyze(Program* program);  // Точка входа
+};

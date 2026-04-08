@@ -1,18 +1,23 @@
 #include "Tokens.hpp"
+#include "Type.hpp"
 #include <expected>
 #include <fstream>
+#include <memory>
 
 struct ASTNode{
     virtual ~ASTNode() = default;
 };
 
-struct Expr : ASTNode {};   //  Возвращает значение
+struct Expr : ASTNode {     //  Возвращает значение
+    std::shared_ptr<Type> resolvedType;  //  Тип, определённый семантическим анализатором
+};
 struct Stmt : ASTNode {};   //  Выполнят действие
 
 //  Выражения
 
 struct Number : Expr{
     double value;
+    bool isFloat = false;  //  true если литерал содержит точку
 };
 
 struct String : Expr{
