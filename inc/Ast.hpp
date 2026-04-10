@@ -157,6 +157,25 @@ struct StructDecl : Stmt{
     std::vector<StructField> fields;
 };
 
+struct ClassDecl : Stmt{
+    std::string name;
+    std::vector<StructField> fields;       //  Поля класса
+    std::vector<FuncDecl*> methods;        //  Методы
+    FuncDecl* constructor = nullptr;       //  Конструктор (имя = имя класса)
+    FuncDecl* destructor = nullptr;        //  Деструктор (~имя класса)
+};
+
+//  new ClassName(args...)
+struct NewExpr : Expr{
+    std::string className;
+    std::vector<Expr*> args;
+};
+
+//  delete expr;
+struct DeleteStmt : Stmt{
+    Expr* value;
+};
+
 struct TypeAlias : Stmt{
     std::string alias;
     std::string original;

@@ -23,7 +23,9 @@ static bool typesEqual(const std::shared_ptr<Type>& a, const std::shared_ptr<Typ
     if (a->kind != b->kind) return false;
     if (a->kind == TypeKind::Array)
         return typesEqual(a->elementType, b->elementType) && a->arraySize == b->arraySize;
-    if (a->kind == TypeKind::Struct || a->kind == TypeKind::Alias)
+    if (a->kind == TypeKind::DynArray)
+        return typesEqual(a->elementType, b->elementType);
+    if (a->kind == TypeKind::Struct || a->kind == TypeKind::Class || a->kind == TypeKind::Alias)
         return a->name == b->name;
     return true;  //  примитивы одного kind — одинаковые
 }
@@ -45,8 +47,10 @@ static std::string typeToString(const std::shared_ptr<Type>& t) {
         case TypeKind::Char:    return "char";
         case TypeKind::String:  return "string";
         case TypeKind::Void:    return "void";
-        case TypeKind::Array:   return typeToString(t->elementType) + "[]";
+        case TypeKind::Array:   return typeToString(t->elementType) + "[" + std::to_string(t->arraySize) + "]";
+        case TypeKind::DynArray: return typeToString(t->elementType) + "[]";
         case TypeKind::Struct:  return t->name;
+        case TypeKind::Class:   return t->name;
         case TypeKind::Alias:   return t->name;
         default:                return "<unknown>";
     }
@@ -118,6 +122,37 @@ static bool isImplicitlyConvertible(const std::shared_ptr<Type>& from, const std
     //  Любой int/uint → float64
     if (isIntType(from) && to->kind == TypeKind::Float64)
         return true;
+
+    //  Array (фиксированный литерал) → DynArray с совместимым типом элемента
+    //  Позволяет: int[] arr = [1, 2, 3];  и  int[][] m = [[1, 2], [3, 4]];
+    //  Рекурсивно проверяем элементы (для вложенных массивов)
+    if (from->kind == TypeKind::Array && to->kind == TypeKind::DynArray)
+        return from->elementType && to->elementType
+            && isImplicitlyConvertible(from->elementType, to->elementType);
+
+    return false;
+}
+
+//  Проверяет допустимость явного приведения cast<To>(from)
+//  Таблица из спецификации: int↔int, int→float, float→int, float↔float,
+//  int↔bool, char↔int.  string ↔ числовые — запрещено.
+static bool isCastable(const std::shared_ptr<Type>& from, const std::shared_ptr<Type>& to) {
+    if (!from || !to) return false;
+    if (typesEqual(from, to)) return true;
+
+    bool fromInt = isIntType(from);
+    bool toInt = isIntType(to);
+    bool fromFloat = isFloatType(from);
+    bool toFloat = isFloatType(to);
+
+    //  int ↔ int, int ↔ float, float ↔ float
+    if ((fromInt || fromFloat) && (toInt || toFloat)) return true;
+    //  int ↔ bool
+    if (fromInt && to->kind == TypeKind::Bool) return true;
+    if (from->kind == TypeKind::Bool && toInt) return true;
+    //  char ↔ int
+    if (from->kind == TypeKind::Char && toInt) return true;
+    if (fromInt && to->kind == TypeKind::Char) return true;
 
     return false;
 }
@@ -255,11 +290,46 @@ std::shared_ptr<Type> SemanticAnalyzer::resolveTypeName(const std::string& name)
     if (name == "string")                     return makeType(TypeKind::String);
     if (name == "void")                       return makeType(TypeKind::Void);
 
+    //  Массивный тип: суффикс [] или [N] на конце строки
+    //  "int[]" → DynArray(int), "int[3]" → Array(int, 3)
+    //  "int[][]" → DynArray(DynArray(int)), "int[3][4]" → Array(Array(int, 4), 3)
+    //  Разбираем с конца: последний суффикс — внешний массив
+    if (name.size() > 2 && name.back() == ']') {
+        //  Ищем открывающую '[' последнего суффикса
+        auto openBracket = name.rfind('[');
+        if (openBracket == std::string::npos) return nullptr;
+
+        //  Базовый тип — всё до последнего '['
+        std::string baseName = name.substr(0, openBracket);
+        //  Содержимое между [ и ] — пустое для [], число для [N]
+        std::string inside = name.substr(openBracket + 1, name.size() - openBracket - 2);
+
+        //  Рекурсивно разрешаем базовый тип (для int[][] сначала разрешит int[])
+        auto elemType = resolveTypeName(baseName);
+        if (!elemType) return nullptr;
+
+        if (inside.empty()) {
+            //  T[] — динамический массив
+            auto t = std::make_shared<Type>();
+            t->kind = TypeKind::DynArray;
+            t->elementType = elemType;
+            return t;
+        } else {
+            //  T[N] — фиксированный массив
+            return makeArrayType(elemType, std::stoi(inside));
+        }
+    }
+
     //  Пользовательский тип — ищем в таблице символов
     auto sym = table.resolve(name);
     if (sym) {
         if (sym->kind == SymbolKind::Struct) {
             auto t = makeType(TypeKind::Struct);
+            t->name = name;
+            return t;
+        }
+        if (sym->kind == SymbolKind::Class) {
+            auto t = makeType(TypeKind::Class);
             t->name = name;
             return t;
         }
@@ -444,7 +514,52 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr) {
     //  ─── Вызов функции ───
     //  Проверяем: функция существует, количество аргументов, типы аргументов
     if (auto* call = dynamic_cast<FuncCall*>(expr)) {
-        //  Пока поддерживаем только прямой вызов по имени (не через выражение)
+        //  Вызов метода: obj.method(args)
+        if (auto* fieldCallee = dynamic_cast<FieldAccess*>(call->callee)) {
+            auto objType = analyzeExpr(fieldCallee->object);
+            if (!objType || objType->kind != TypeKind::Class) {
+                for (auto* arg : call->args) analyzeExpr(arg);
+                if (objType)
+                    errors.push_back("method call on non-class type '" + typeToString(objType) + "'");
+                return nullptr;
+            }
+
+            auto clsSym = table.resolve(objType->name);
+            if (!clsSym || !clsSym->classInfo) return nullptr;
+
+            auto mIt = clsSym->classInfo->methods.find(fieldCallee->field);
+            if (mIt == clsSym->classInfo->methods.end()) {
+                errors.push_back("class '" + objType->name + "' has no method '" + fieldCallee->field + "'");
+                for (auto* arg : call->args) analyzeExpr(arg);
+                return nullptr;
+            }
+
+            auto& mInfo = mIt->second;
+            std::vector<std::shared_ptr<Type>> argTypes;
+            for (auto* arg : call->args)
+                argTypes.push_back(analyzeExpr(arg));
+
+            if (argTypes.size() != mInfo->params.size()) {
+                errors.push_back("method '" + fieldCallee->field + "' expects "
+                    + std::to_string(mInfo->params.size()) + " arguments, got "
+                    + std::to_string(argTypes.size()));
+            } else {
+                for (size_t j = 0; j < argTypes.size(); j++) {
+                    if (argTypes[j] && mInfo->params[j].second
+                        && !isImplicitlyConvertible(argTypes[j], mInfo->params[j].second)) {
+                        errors.push_back("method '" + fieldCallee->field + "' argument "
+                            + std::to_string(j + 1) + ": cannot convert '"
+                            + typeToString(argTypes[j]) + "' to '"
+                            + typeToString(mInfo->params[j].second) + "'");
+                    }
+                }
+            }
+
+            expr->resolvedType = mInfo->returnType;
+            return expr->resolvedType;
+        }
+
+        //  Прямой вызов по имени
         auto* callee = dynamic_cast<Identifier*>(call->callee);
         if (!callee) {
             analyzeExpr(call->callee);
@@ -496,28 +611,48 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr) {
         return expr->resolvedType;
     }
 
-    //  ─── Доступ к полю структуры (p.x) ───
-    //  Проверяем: объект — структура, поле существует
+    //  ─── Доступ к полю структуры/класса (p.x) ───
     if (auto* field = dynamic_cast<FieldAccess*>(expr)) {
         auto objType = analyzeExpr(field->object);
         if (!objType) return nullptr;
 
-        if (objType->kind != TypeKind::Struct) {
-            errors.push_back("field access on non-struct type '" + typeToString(objType) + "'");
+        if (objType->kind == TypeKind::Struct) {
+            auto structSym = table.resolve(objType->name);
+            if (structSym && structSym->structInfo) {
+                for (auto& [fname, ftype] : structSym->structInfo->fields) {
+                    if (fname == field->field) {
+                        expr->resolvedType = ftype;
+                        return expr->resolvedType;
+                    }
+                }
+                errors.push_back("struct '" + objType->name + "' has no field '" + field->field + "'");
+            }
             return nullptr;
         }
 
-        //  Ищем определение структуры и проверяем наличие поля
-        auto structSym = table.resolve(objType->name);
-        if (structSym && structSym->structInfo) {
-            for (auto& [fname, ftype] : structSym->structInfo->fields) {
-                if (fname == field->field) {
-                    expr->resolvedType = ftype;  //  Тип поля
+        if (objType->kind == TypeKind::Class) {
+            auto clsSym = table.resolve(objType->name);
+            if (clsSym && clsSym->classInfo) {
+                //  Сначала ищем поле
+                for (auto& [fname, ftype] : clsSym->classInfo->fields) {
+                    if (fname == field->field) {
+                        expr->resolvedType = ftype;
+                        return expr->resolvedType;
+                    }
+                }
+                //  Потом метод — возвращаем тип возврата метода (для obj.method без вызова — не поддерживаем,
+                //  но нужно чтобы FuncCall мог увидеть что это метод)
+                auto mIt = clsSym->classInfo->methods.find(field->field);
+                if (mIt != clsSym->classInfo->methods.end()) {
+                    expr->resolvedType = mIt->second->returnType;
                     return expr->resolvedType;
                 }
+                errors.push_back("class '" + objType->name + "' has no field or method '" + field->field + "'");
             }
-            errors.push_back("struct '" + objType->name + "' has no field '" + field->field + "'");
+            return nullptr;
         }
+
+        errors.push_back("field access on non-struct/class type '" + typeToString(objType) + "'");
         return nullptr;
     }
 
@@ -614,11 +749,15 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr) {
     //  ─── Явное приведение типа cast<T>(expr) ───
     //  Анализируем внутреннее выражение, результат — целевой тип
     if (auto* cast = dynamic_cast<CastExpr*>(expr)) {
-        analyzeExpr(cast->value);
+        auto fromType = analyzeExpr(cast->value);
         auto targetType = resolveTypeName(cast->targetType);
         if (!targetType) {
             errors.push_back("unknown type '" + cast->targetType + "' in cast");
             return nullptr;
+        }
+        if (fromType && !isCastable(fromType, targetType)) {
+            errors.push_back("cannot cast '" + typeToString(fromType)
+                + "' to '" + typeToString(targetType) + "'");
         }
         expr->resolvedType = targetType;
         return expr->resolvedType;
@@ -626,12 +765,86 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr) {
 
     //  ─── Доступ через namespace (Math::PI) ───
     if (auto* ns = dynamic_cast<NamespaceAccess*>(expr)) {
-        if (!table.resolve(ns->nameSpace))
+        auto nsSym = table.resolve(ns->nameSpace);
+        if (!nsSym) {
             errors.push_back("'" + ns->nameSpace + "' is not declared");
-        return nullptr;  //  TODO: разрешение типа через namespace scope
+            return nullptr;
+        }
+        if (nsSym->kind != SymbolKind::Namespace || !nsSym->nsScope) {
+            errors.push_back("'" + ns->nameSpace + "' is not a namespace");
+            return nullptr;
+        }
+        //  Ищем member внутри scope namespace
+        auto it = nsSym->nsScope->symbols.find(ns->member);
+        if (it == nsSym->nsScope->symbols.end()) {
+            errors.push_back("'" + ns->member + "' is not declared in namespace '" + ns->nameSpace + "'");
+            return nullptr;
+        }
+        expr->resolvedType = it->second->type;
+        return expr->resolvedType;
+    }
+
+    //  ─── new ClassName(args...) ───
+    if (auto* newExpr = dynamic_cast<NewExpr*>(expr)) {
+        auto clsSym = table.resolve(newExpr->className);
+        if (!clsSym || clsSym->kind != SymbolKind::Class) {
+            errors.push_back("'" + newExpr->className + "' is not a class");
+            return nullptr;
+        }
+
+        //  Проверяем аргументы конструктора
+        if (clsSym->classInfo && clsSym->classInfo->constructor) {
+            auto& cParams = clsSym->classInfo->constructor->params;
+            if (newExpr->args.size() != cParams.size()) {
+                errors.push_back("constructor of '" + newExpr->className + "' expects "
+                    + std::to_string(cParams.size()) + " arguments, got "
+                    + std::to_string(newExpr->args.size()));
+            }
+            for (size_t j = 0; j < newExpr->args.size(); j++) {
+                auto argType = analyzeExpr(newExpr->args[j]);
+                if (j < cParams.size() && argType && cParams[j].second) {
+                    if (!isImplicitlyConvertible(argType, cParams[j].second))
+                        errors.push_back("constructor argument " + std::to_string(j + 1)
+                            + ": cannot convert '" + typeToString(argType)
+                            + "' to '" + typeToString(cParams[j].second) + "'");
+                }
+            }
+        } else {
+            //  Нет конструктора — аргументов быть не должно
+            if (!newExpr->args.empty())
+                errors.push_back("class '" + newExpr->className + "' has no constructor");
+            for (auto* arg : newExpr->args)
+                analyzeExpr(arg);
+        }
+
+        auto t = makeType(TypeKind::Class);
+        t->name = newExpr->className;
+        expr->resolvedType = t;
+        return expr->resolvedType;
     }
 
     return nullptr;
+}
+
+//  Проверяет, что инструкция (или блок) гарантированно завершается return
+//  Используется для проверки non-void функций
+static bool alwaysReturns(Stmt* stmt) {
+    if (!stmt) return false;
+    if (dynamic_cast<Return*>(stmt)) return true;
+
+    //  Блок возвращает, если его последняя инструкция возвращает
+    if (auto* block = dynamic_cast<Block*>(stmt)) {
+        if (block->statements.empty()) return false;
+        return alwaysReturns(block->statements.back());
+    }
+
+    //  if/else возвращает, если обе ветки возвращают
+    if (auto* ifStmt = dynamic_cast<If*>(stmt)) {
+        if (!ifStmt->elseBranch) return false;
+        return alwaysReturns(ifStmt->thenBranch) && alwaysReturns(ifStmt->elseBranch);
+    }
+
+    return false;
 }
 
 // --- Первый проход — сбор top-level имён ---
@@ -715,7 +928,59 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
 
             table.enterScope();
             collectTopLevel(ns->decls);
+            sym->nsScope = table.currentScope();
             table.exitScope();
+        }
+        //  Класс — регистрируем имя, поля, методы, конструктор, деструктор
+        else if (auto* cls = dynamic_cast<ClassDecl*>(decl)) {
+            auto sym = std::make_shared<Symbol>();
+            sym->name = cls->name;
+            sym->kind = SymbolKind::Class;
+
+            sym->classInfo = std::make_shared<ClassInfo>();
+            sym->classInfo->name = cls->name;
+
+            //  Поля
+            for (auto& field : cls->fields) {
+                auto fType = resolveTypeName(field.typeName);
+                if (!fType)
+                    errors.push_back("unknown field type '" + field.typeName
+                        + "' in class '" + cls->name + "'");
+                sym->classInfo->fields.push_back({field.name, fType});
+            }
+
+            //  Методы
+            for (auto* method : cls->methods) {
+                auto mInfo = std::make_shared<FuncInfo>();
+                mInfo->returnType = resolveTypeName(method->returnType);
+                for (auto& param : method->params) {
+                    auto pType = resolveTypeName(param.typeName);
+                    mInfo->params.push_back({param.name, pType});
+                }
+                sym->classInfo->methods[method->name] = mInfo;
+            }
+
+            //  Конструктор
+            if (cls->constructor) {
+                auto cInfo = std::make_shared<FuncInfo>();
+                cInfo->returnType = makeType(TypeKind::Void);
+                for (auto& param : cls->constructor->params) {
+                    auto pType = resolveTypeName(param.typeName);
+                    cInfo->params.push_back({param.name, pType});
+                }
+                sym->classInfo->constructor = cInfo;
+            }
+
+            //  Деструктор
+            sym->classInfo->hasDestructor = (cls->destructor != nullptr);
+
+            auto t = makeType(TypeKind::Class);
+            t->name = cls->name;
+            sym->type = t;
+
+            auto result = table.declare(sym);
+            if (!result)
+                errors.push_back(result.error());
         }
         //  Export — разворачиваем обёртку и собираем внутреннее объявление
         else if (auto* exp = dynamic_cast<ExportDecl*>(decl)) {
@@ -735,37 +1000,105 @@ void SemanticAnalyzer::analyzeBlock(Block* block) {
 
 void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
     if (auto* var = dynamic_cast<VarDecl*>(stmt)) { //  Если это объявление переменной
-        auto sym = std::make_shared<Symbol>();      //  То сперва всё записываем
+        auto sym = std::make_shared<Symbol>();
         sym->name = var->name;
         sym->kind = SymbolKind::Variable;
         sym->isConst = var->isConst;
         sym->isInitialized = (var->init != nullptr);
 
-        analyzeExpr(var->init);     //  Затем смотрим чё в неё пишем
+        //  Анализируем инициализатор и получаем его тип
+        std::shared_ptr<Type> initType = analyzeExpr(var->init);
 
-        auto result = table.declare(sym);   //  И сохраняем её в таблицу
+        if (var->isAuto) {
+            //  auto — выводим тип из инициализатора
+            if (!initType)
+                errors.push_back("'auto' requires initializer to infer type for '" + var->name + "'");
+            sym->type = initType;
+        } else {
+            //  Явный тип — разрешаем имя типа
+            sym->type = resolveTypeName(var->typeName);
+            if (!sym->type)
+                errors.push_back("unknown type '" + var->typeName + "'");
+            else if (sym->type->kind == TypeKind::Void)
+                errors.push_back("cannot declare variable '" + var->name + "' with type 'void'");
+
+            //  Проверяем совместимость типа переменной и инициализатора
+            //  Допускается widening: int32 x = int8_val — ок
+            if (initType && sym->type) {
+                if (!isImplicitlyConvertible(initType, sym->type)) {
+                    errors.push_back("cannot initialize '" + var->name + "' of type '"
+                        + typeToString(sym->type) + "' with '" + typeToString(initType) + "'");
+                }
+            }
+        }
+
+        auto result = table.declare(sym);   //  Сохраняем в таблицу символов
         if (!result)
             errors.push_back(result.error());
     }
     else if (auto* block = dynamic_cast<Block*>(stmt)) {    //  Если это блок то соответственно анализируем блок
         analyzeBlock(block);
     }
-    else if (auto* assign = dynamic_cast<Assign*>(stmt)) {  //  Присваивание: проверяем левую и правую части
-        analyzeExpr(assign->target);
-        analyzeExpr(assign->value);
+    else if (auto* assign = dynamic_cast<Assign*>(stmt)) {  //  Присваивание: проверяем типы, const, инициализацию
+        auto targetType = analyzeExpr(assign->target);
+        auto valueType = analyzeExpr(assign->value);
+
+        //  Проверяем что target не const
+        if (auto* id = dynamic_cast<Identifier*>(assign->target)) {
+            auto sym = table.resolve(id->name);
+            if (sym && sym->isConst)
+                errors.push_back("cannot assign to const variable '" + id->name + "'");
+            //  Помечаем переменную как инициализированную (для int x; x = 5;)
+            if (sym) sym->isInitialized = true;
+        }
+
+        //  Проверяем совместимость типов (с учётом widening)
+        if (targetType && valueType) {
+            if (!isImplicitlyConvertible(valueType, targetType)) {
+                errors.push_back("type mismatch in assignment: cannot assign '"
+                    + typeToString(valueType) + "' to '" + typeToString(targetType) + "'");
+            }
+        }
     }
-    else if (auto* ifStmt = dynamic_cast<If*>(stmt)) {  //  if — проверяем условие и обе ветки
-        analyzeExpr(ifStmt->condition);
+    else if (auto* ifStmt = dynamic_cast<If*>(stmt)) {  //  if — условие должно быть bool
+        auto condType = analyzeExpr(ifStmt->condition);
+        if (condType && condType->kind != TypeKind::Bool)
+            errors.push_back("if condition must be bool, got '" + typeToString(condType) + "'");
         analyzeStmt(ifStmt->thenBranch);
         if (ifStmt->elseBranch)
             analyzeStmt(ifStmt->elseBranch);
     }
-    else if (auto* whileStmt = dynamic_cast<While*>(stmt)) {  //  while — проверяем условие и тело
-        analyzeExpr(whileStmt->condition);
+    else if (auto* whileStmt = dynamic_cast<While*>(stmt)) {  //  while — условие должно быть bool
+        auto condType = analyzeExpr(whileStmt->condition);
+        if (condType && condType->kind != TypeKind::Bool)
+            errors.push_back("while condition must be bool, got '" + typeToString(condType) + "'");
+        loopDepth++;
         analyzeStmt(whileStmt->body);
+        loopDepth--;
     }
-    else if (auto* ret = dynamic_cast<Return*>(stmt)) {  //  return — проверяем возвращаемое выражение
-        analyzeExpr(ret->value);
+    else if (auto* breakStmt = dynamic_cast<Break*>(stmt)) {
+        if (loopDepth == 0)
+            errors.push_back("'break' outside of loop");
+    }
+    else if (auto* continueStmt = dynamic_cast<Continue*>(stmt)) {
+        if (loopDepth == 0)
+            errors.push_back("'continue' outside of loop");
+    }
+    else if (auto* ret = dynamic_cast<Return*>(stmt)) {  //  return — проверяем тип возвращаемого значения
+        if (ret->value) {
+            auto valType = analyzeExpr(ret->value);
+            //  Сравниваем с типом возврата текущей функции
+            if (valType && currentReturnType) {
+                if (!isImplicitlyConvertible(valType, currentReturnType)) {
+                    errors.push_back("return type mismatch: expected '"
+                        + typeToString(currentReturnType) + "', got '" + typeToString(valType) + "'");
+                }
+            }
+        } else {
+            //  return; без значения — функция должна быть void
+            if (currentReturnType && currentReturnType->kind != TypeKind::Void)
+                errors.push_back("return without value in non-void function");
+        }
     }
     else if (auto* exprStmt = dynamic_cast<ExprStmt*>(stmt)) {  //  выражение как инструкция (напр. print(x);)
         analyzeExpr(exprStmt->expr);
@@ -773,6 +1106,10 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
     else if (auto* func = dynamic_cast<FuncDecl*>(stmt)) {  //  Объявление функции
         //  Имя уже зарегистрировано в collectTopLevel — здесь только анализ тела
         auto sym = table.resolve(func->name);
+
+        //  Сохраняем предыдущий тип возврата и ставим текущий (для проверки return)
+        auto prevReturnType = currentReturnType;
+        currentReturnType = (sym && sym->funcInfo) ? sym->funcInfo->returnType : nullptr;
 
         //  Тело функции — новый scope, в который добавляем параметры с типами
         table.enterScope();
@@ -794,6 +1131,15 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         for (auto* s : func->body->statements)
             analyzeStmt(s);
         table.exitScope();
+
+        //  Проверяем что non-void функция возвращает значение на всех путях
+        if (currentReturnType && currentReturnType->kind != TypeKind::Void) {
+            if (!alwaysReturns(func->body))
+                errors.push_back("function '" + func->name + "' does not return a value on all paths");
+        }
+
+        //  Восстанавливаем тип возврата внешней функции (для вложенных объявлений)
+        currentReturnType = prevReturnType;
     }
     else if (auto* structDecl = dynamic_cast<StructDecl*>(stmt)) {
         //  Уже зарегистрирован в collectTopLevel — пропускаем
@@ -803,13 +1149,117 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         //  Уже зарегистрирован в collectTopLevel — пропускаем
         (void)alias;
     }
+    else if (auto* cls = dynamic_cast<ClassDecl*>(stmt)) {
+        auto clsSym = table.resolve(cls->name);
+        if (!clsSym || !clsSym->classInfo) return;
+
+        //  Тип self для методов
+        auto selfType = makeType(TypeKind::Class);
+        selfType->name = cls->name;
+
+        //  Анализируем тела методов
+        for (auto* method : cls->methods) {
+            auto prevRetType = currentReturnType;
+            auto mIt = clsSym->classInfo->methods.find(method->name);
+            currentReturnType = (mIt != clsSym->classInfo->methods.end()) ? mIt->second->returnType : nullptr;
+
+            table.enterScope();
+            //  Добавляем self
+            auto selfSym = std::make_shared<Symbol>();
+            selfSym->name = "self";
+            selfSym->kind = SymbolKind::Variable;
+            selfSym->type = selfType;
+            selfSym->isInitialized = true;
+            table.declare(selfSym);
+
+            //  Добавляем параметры
+            if (mIt != clsSym->classInfo->methods.end()) {
+                for (size_t j = 0; j < method->params.size(); j++) {
+                    auto pSym = std::make_shared<Symbol>();
+                    pSym->name = method->params[j].name;
+                    pSym->kind = SymbolKind::Variable;
+                    pSym->isInitialized = true;
+                    pSym->type = (j < mIt->second->params.size()) ? mIt->second->params[j].second : nullptr;
+                    table.declare(pSym);
+                }
+            }
+
+            for (auto* s : method->body->statements)
+                analyzeStmt(s);
+            table.exitScope();
+
+            if (currentReturnType && currentReturnType->kind != TypeKind::Void) {
+                if (!alwaysReturns(method->body))
+                    errors.push_back("method '" + cls->name + "." + method->name + "' does not return a value on all paths");
+            }
+            currentReturnType = prevRetType;
+        }
+
+        //  Анализируем тело конструктора
+        if (cls->constructor) {
+            auto prevRetType = currentReturnType;
+            currentReturnType = makeType(TypeKind::Void);
+
+            table.enterScope();
+            auto selfSym = std::make_shared<Symbol>();
+            selfSym->name = "self";
+            selfSym->kind = SymbolKind::Variable;
+            selfSym->type = selfType;
+            selfSym->isInitialized = true;
+            table.declare(selfSym);
+
+            if (clsSym->classInfo->constructor) {
+                for (size_t j = 0; j < cls->constructor->params.size(); j++) {
+                    auto pSym = std::make_shared<Symbol>();
+                    pSym->name = cls->constructor->params[j].name;
+                    pSym->kind = SymbolKind::Variable;
+                    pSym->isInitialized = true;
+                    pSym->type = (j < clsSym->classInfo->constructor->params.size())
+                        ? clsSym->classInfo->constructor->params[j].second : nullptr;
+                    table.declare(pSym);
+                }
+            }
+
+            for (auto* s : cls->constructor->body->statements)
+                analyzeStmt(s);
+            table.exitScope();
+            currentReturnType = prevRetType;
+        }
+
+        //  Анализируем тело деструктора
+        if (cls->destructor) {
+            auto prevRetType = currentReturnType;
+            currentReturnType = makeType(TypeKind::Void);
+
+            table.enterScope();
+            auto selfSym = std::make_shared<Symbol>();
+            selfSym->name = "self";
+            selfSym->kind = SymbolKind::Variable;
+            selfSym->type = selfType;
+            selfSym->isInitialized = true;
+            table.declare(selfSym);
+
+            for (auto* s : cls->destructor->body->statements)
+                analyzeStmt(s);
+            table.exitScope();
+            currentReturnType = prevRetType;
+        }
+    }
+    else if (auto* del = dynamic_cast<DeleteStmt*>(stmt)) {
+        auto valType = analyzeExpr(del->value);
+        if (valType && valType->kind != TypeKind::Class)
+            errors.push_back("delete requires a class instance, got '" + typeToString(valType) + "'");
+    }
     else if (auto* ns = dynamic_cast<NamespaceDecl*>(stmt)) {
-        //  Имя уже зарегистрировано в collectTopLevel, анализируем содержимое
-        table.enterScope();
-        collectTopLevel(ns->decls);  //  собираем имена внутри namespace
-        for (auto* decl : ns->decls)
-            analyzeStmt(decl);
-        table.exitScope();
+        //  Имя уже зарегистрировано в collectTopLevel, scope сохранён в nsScope
+        //  Входим в сохранённый scope и анализируем тела объявлений
+        auto nsSym = table.resolve(ns->name);
+        if (nsSym && nsSym->nsScope) {
+            table.pushScope(nsSym->nsScope);
+            for (auto* decl : ns->decls)
+                analyzeStmt(decl);
+            table.exitScope();
+        }
     }
     else if (auto* exp = dynamic_cast<ExportDecl*>(stmt)) {  //  export — просто анализируем обёрнутое объявление
         analyzeStmt(exp->decl);

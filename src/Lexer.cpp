@@ -98,6 +98,15 @@ Token typeIdentifier(const std::string& elem){
     else if (elem == "export"){
         return {TokenType::Export, SubType::None, elem};
     }
+    else if (elem == "class"){
+        return {TokenType::Class, SubType::None, elem};
+    }
+    else if (elem == "new"){
+        return {TokenType::New, SubType::None, elem};
+    }
+    else if (elem == "delete"){
+        return {TokenType::Delete, SubType::None, elem};
+    }
     else if (elem == "true" || elem == "false"){
         return {TokenType::BoolLit, SubType::None, elem};
     }
@@ -222,6 +231,9 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
                 else{
                     res.emplace_back(TokenType::Colon, std::string(1, ':'));
                 }
+                break;
+            case '~':
+                res.emplace_back(TokenType::Tilde, std::string(1, '~'));
                 break;
             case '"': {
                 std::string str;

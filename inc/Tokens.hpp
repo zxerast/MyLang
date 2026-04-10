@@ -54,6 +54,10 @@ enum class TokenType {   // Тип токенов
     Auto,
     Import,
     Export,
+    Class,
+    New,
+    Delete,
+    Tilde,
     End,
 };
 

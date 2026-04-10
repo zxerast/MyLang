@@ -9,6 +9,43 @@ struct Parser {
 
     Parser(const std::vector<Token>& source) : source(source) {}
 
+    //  Разбирает имя типа: int, int[], int[3], int[][], int[3][4], Point и т.д.
+    //  Сначала читает базовый тип, потом цепочку суффиксов [] или [N]
+    //  Возвращает строковое представление: "int", "int[]", "int[3]", "int[][3]"
+    std::expected<std::string, std::string> parseTypeName() {
+        //  Базовый тип: int, string, Point и т.д.
+        if (i >= source.size() || (source[i].type != TokenType::TypeName && source[i].type != TokenType::Iden)) {
+            return std::unexpected("Ошибка парсера: ожидалось имя типа");
+        }
+        std::string result = source[i++].lexeme;
+
+        //  Суффиксы [] или [N] — могут повторяться (int[][], int[3][4])
+        while (i < source.size() && source[i].type == TokenType::LeftBracket) {
+            i++;  //  съели '['
+
+            if (i < source.size() && source[i].type == TokenType::RightBracket) {
+                //  T[] — динамический массив
+                i++;  //  съели ']'
+                result += "[]";
+            }
+            else if (i < source.size() && source[i].type == TokenType::Number) {
+                //  T[N] — фиксированный массив
+                std::string size = source[i++].lexeme;
+
+                if (i >= source.size() || source[i].type != TokenType::RightBracket) {
+                    return std::unexpected("Ошибка парсера: ожидалась ']' после размера массива");
+                }
+                i++;  //  съели ']'
+                result += "[" + size + "]";
+            }
+            else {
+                return std::unexpected("Ошибка парсера: ожидался ']' или размер в типе массива");
+            }
+        }
+
+        return result;
+    }
+
     std::expected<Stmt*, std::string> parseStatement() {
         if (i < source.size() && source[i].type == TokenType::If){
             return parseIf();
@@ -43,6 +80,19 @@ struct Parser {
 
         if (i < source.size() && source[i].type == TokenType::Continue){
             return parseContinue();
+        }
+
+        // delete expr;
+        if (i < source.size() && source[i].type == TokenType::Delete) {
+            i++; // съели 'delete'
+            auto expr = parseEquasion();
+            if (!expr) return std::unexpected(expr.error());
+            if (i >= source.size() || source[i].type != TokenType::Separator)
+                return std::unexpected("Ошибка парсера: ожидался ';' после delete");
+            i++; // съели ';'
+            auto* node = new DeleteStmt();
+            node->value = *expr;
+            return node;
         }
 
         if (i < source.size() && (source[i].type == TokenType::LeftBrace)){
@@ -226,11 +276,14 @@ struct Parser {
     std::expected<Stmt*, std::string> parseFuncDecl(){
         auto node = new FuncDecl;
 
-        if (i >= source.size() || (source[i].type != TokenType::TypeName && source[i].type != TokenType::Iden)){
-            delete node;
-            return std::unexpected("Ошибка парсера: ожидалось имя типа в объявлении функции");
+        {
+            auto retType = parseTypeName();
+            if (!retType) {
+                delete node;
+                return std::unexpected(retType.error());
+            }
+            node->returnType = *retType;
         }
-        node->returnType = source[i++].lexeme;
 
         if (i >= source.size() || source[i].type != TokenType::Iden){
             delete node;
@@ -247,11 +300,12 @@ struct Parser {
         // парсим параметры: type name, type name, ...
         if (i < source.size() && source[i].type != TokenType::RightParen){
             while (true){
-                if (i >= source.size() || source[i].type != TokenType::TypeName){
+                auto paramType = parseTypeName();
+                if (!paramType) {
                     delete node;
-                    return std::unexpected("Ошибка парсера: ожидался тип параметра");
+                    return std::unexpected(paramType.error());
                 }
-                std::string typeName = source[i++].lexeme;
+                std::string typeName = *paramType;
 
                 if (i >= source.size() || source[i].type != TokenType::Iden){
                     delete node;
@@ -308,11 +362,12 @@ struct Parser {
         i++; // съели '{'
 
         while (i < source.size() && source[i].type != TokenType::RightBrace){
-            if (i >= source.size() || source[i].type != TokenType::TypeName){
+            auto fieldType = parseTypeName();
+            if (!fieldType) {
                 delete node;
-                return std::unexpected("Ошибка парсера: ожидался тип поля структуры");
+                return std::unexpected(fieldType.error());
             }
-            std::string typeName = source[i++].lexeme;
+            std::string typeName = *fieldType;
 
             if (i >= source.size() || source[i].type != TokenType::Iden){
                 delete node;
@@ -332,6 +387,144 @@ struct Parser {
         if (i >= source.size()){
             delete node;
             return std::unexpected("Ошибка парсера: ожидалась '}' в объявлении структуры");
+        }
+        i++; // съели '}'
+
+        return node;
+    }
+
+    std::expected<Stmt*, std::string> parseClassDecl(){
+        i++; // съели 'class'
+
+        if (i >= source.size() || source[i].type != TokenType::Iden)
+            return std::unexpected("Ошибка парсера: ожидалось имя класса");
+
+        auto* node = new ClassDecl();
+        node->name = source[i++].lexeme;
+
+        if (i >= source.size() || source[i].type != TokenType::LeftBrace) {
+            delete node;
+            return std::unexpected("Ошибка парсера: ожидалась '{' в объявлении класса");
+        }
+        i++; // съели '{'
+
+        while (i < source.size() && source[i].type != TokenType::RightBrace) {
+            //  Деструктор: ~ClassName()
+            if (i + 1 < source.size() && source[i].type == TokenType::Tilde
+                && source[i + 1].type == TokenType::Iden && source[i + 1].lexeme == node->name) {
+                i++; // съели '~'
+                i++; // съели имя
+
+                if (i >= source.size() || source[i].type != TokenType::LeftParen) {
+                    delete node;
+                    return std::unexpected("Ошибка парсера: ожидалась '(' после имени деструктора");
+                }
+                i++; // съели '('
+                if (i >= source.size() || source[i].type != TokenType::RightParen) {
+                    delete node;
+                    return std::unexpected("Ошибка парсера: деструктор не принимает параметров");
+                }
+                i++; // съели ')'
+
+                if (i >= source.size() || source[i].type != TokenType::LeftBrace) {
+                    delete node;
+                    return std::unexpected("Ошибка парсера: ожидалась '{' в теле деструктора");
+                }
+                i++; // съели '{'
+
+                auto body = parseBlock();
+                if (!body) { delete node; return std::unexpected(body.error()); }
+
+                auto* dtor = new FuncDecl();
+                dtor->returnType = "void";
+                dtor->name = "~" + node->name;
+                dtor->body = dynamic_cast<Block*>(*body);
+                node->destructor = dtor;
+                continue;
+            }
+
+            //  Конструктор: ClassName(params)
+            if (i + 1 < source.size() && source[i].type == TokenType::Iden
+                && source[i].lexeme == node->name && source[i + 1].type == TokenType::LeftParen) {
+                i++; // съели имя
+                i++; // съели '('
+
+                //  Парсим параметры
+                std::vector<Param> params;
+                if (i < source.size() && source[i].type != TokenType::RightParen) {
+                    while (true) {
+                        auto paramType = parseTypeName();
+                        if (!paramType) { delete node; return std::unexpected(paramType.error()); }
+
+                        if (i >= source.size() || source[i].type != TokenType::Iden) {
+                            delete node;
+                            return std::unexpected("Ошибка парсера: ожидалось имя параметра конструктора");
+                        }
+                        params.push_back({*paramType, source[i++].lexeme});
+
+                        if (i < source.size() && source[i].type == TokenType::Comma)
+                            i++;
+                        else
+                            break;
+                    }
+                }
+                if (i >= source.size() || source[i].type != TokenType::RightParen) {
+                    delete node;
+                    return std::unexpected("Ошибка парсера: ожидалась ')' после параметров конструктора");
+                }
+                i++; // съели ')'
+
+                if (i >= source.size() || source[i].type != TokenType::LeftBrace) {
+                    delete node;
+                    return std::unexpected("Ошибка парсера: ожидалась '{' в теле конструктора");
+                }
+                i++; // съели '{'
+
+                auto body = parseBlock();
+                if (!body) { delete node; return std::unexpected(body.error()); }
+
+                auto* ctor = new FuncDecl();
+                ctor->returnType = "void";
+                ctor->name = node->name;
+                ctor->params = params;
+                ctor->body = dynamic_cast<Block*>(*body);
+                node->constructor = ctor;
+                continue;
+            }
+
+            //  Метод: type name(params) { ... }
+            if (i + 2 < source.size()
+                && (source[i].type == TokenType::TypeName || source[i].type == TokenType::Iden)
+                && source[i + 1].type == TokenType::Iden
+                && source[i + 2].type == TokenType::LeftParen) {
+                auto method = parseFuncDecl();
+                if (!method) { delete node; return std::unexpected(method.error()); }
+                node->methods.push_back(dynamic_cast<FuncDecl*>(*method));
+                continue;
+            }
+
+            //  Поле: type name;
+            auto fieldType = parseTypeName();
+            if (!fieldType) { delete node; return std::unexpected(fieldType.error()); }
+
+            if (i >= source.size() || source[i].type != TokenType::Iden) {
+                delete node;
+                return std::unexpected("Ошибка парсера: ожидалось имя поля класса");
+            }
+            std::string fieldName = source[i++].lexeme;
+
+            if (i >= source.size() || source[i].type != TokenType::Separator) {
+                delete node;
+                return std::unexpected("Ошибка парсера: ожидался ';' после поля класса");
+            }
+            i++; // съели ';'
+
+            node->fields.push_back({*fieldType, fieldName});
+        }
+
+        if (i >= source.size()) {
+            delete node;
+            return std::unexpected("Ошибка парсера: ожидалась '}' в объявлении класса");
         }
         i++; // съели '}'
 
@@ -409,6 +602,7 @@ struct Parser {
         }
 
         // смотрим вперёд: type name "(" → функция
+        // Но если после type идёт '[' — это массивный тип (int[] arr), всегда переменная
         if (i + 2 < source.size() &&
             (source[i].type == TokenType::TypeName || source[i].type == TokenType::Iden) &&
             source[i + 1].type == TokenType::Iden &&
@@ -453,6 +647,9 @@ struct Parser {
         if (i < source.size() && source[i].type == TokenType::Struct){
             return parseStructDecl();
         }
+        if (i < source.size() && source[i].type == TokenType::Class){
+            return parseClassDecl();
+        }
         if (i < source.size() && source[i].type == TokenType::Type){
             return parseTypeAlias();
         }
@@ -486,12 +683,14 @@ struct Parser {
             i++;
             node->isAuto = true;
         }
-        else if (i < source.size() && (source[i].type == TokenType::TypeName || source[i].type == TokenType::Iden)){
-            node->typeName = source[i++].lexeme;
-        }
         else {
-            delete node;
-            return std::unexpected("Ошибка парсера: ожидалось имя типа или 'auto' в объявлении переменной");
+            //  Разбираем тип: int, [int], [int; 3], Point и т.д.
+            auto typeName = parseTypeName();
+            if (!typeName) {
+                delete node;
+                return std::unexpected(typeName.error());
+            }
+            node->typeName = *typeName;
         }
 
         if (i < source.size() && (source[i].type == TokenType::Iden)){
@@ -927,6 +1126,41 @@ struct Parser {
             auto *node = new CastExpr();
             node->targetType = targetType;
             node->value = *expr;
+            return node;
+        }
+
+        // new ClassName(args...)
+        if (source[i].type == TokenType::New) {
+            i++; // съели 'new'
+
+            if (i >= source.size() || source[i].type != TokenType::Iden)
+                return std::unexpected("Ошибка парсера: ожидалось имя класса после 'new'");
+            auto* node = new NewExpr();
+            node->className = source[i++].lexeme;
+
+            if (i >= source.size() || source[i].type != TokenType::LeftParen) {
+                delete node;
+                return std::unexpected("Ошибка парсера: ожидалась '(' после имени класса в new");
+            }
+            i++; // съели '('
+
+            if (i < source.size() && source[i].type != TokenType::RightParen) {
+                while (true) {
+                    auto arg = parseEquasion();
+                    if (!arg) { delete node; return std::unexpected(arg.error()); }
+                    node->args.push_back(*arg);
+                    if (i < source.size() && source[i].type == TokenType::Comma)
+                        i++;
+                    else
+                        break;
+                }
+            }
+
+            if (i >= source.size() || source[i].type != TokenType::RightParen) {
+                delete node;
+                return std::unexpected("Ошибка парсера: ожидалась ')' в new");
+            }
+            i++; // съели ')'
             return node;
         }
 

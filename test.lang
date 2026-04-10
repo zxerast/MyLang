@@ -32,7 +32,7 @@ int main() {
     }
 
     // массивы
-    int arr = [10, 20, 30];
+    int[] arr = [10, 20, 30];
     print(arr[0]);
     print(arr[2]);
     print(len(arr));

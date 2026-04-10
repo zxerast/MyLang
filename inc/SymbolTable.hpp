@@ -7,10 +7,14 @@
 #include <memory>
 #include <expected>
 
+struct Scope;     //  forward declaration для nsScope в Symbol
+struct FuncInfo;  //  forward declaration для ClassInfo
+
 enum class SymbolKind {
     Variable,
     Function,
     Struct,
+    Class,
     TypeAlias,
     Namespace,
 };
@@ -18,6 +22,14 @@ enum class SymbolKind {
 struct StructInfo {
     std::string name;   //  Имя структуры
     std::vector<std::pair<std::string, std::shared_ptr<Type>>> fields;  // массив пар: имя поля -> тип
+};
+
+struct ClassInfo {
+    std::string name;
+    std::vector<std::pair<std::string, std::shared_ptr<Type>>> fields;
+    std::unordered_map<std::string, std::shared_ptr<FuncInfo>> methods;  //  имя → сигнатура
+    std::shared_ptr<FuncInfo> constructor = nullptr;
+    bool hasDestructor = false;
 };
 
 struct FuncInfo {
@@ -37,6 +49,8 @@ struct Symbol {
     // Доп. информация в зависимости от kind
     std::shared_ptr<FuncInfo> funcInfo = nullptr;
     std::shared_ptr<StructInfo> structInfo = nullptr;
+    std::shared_ptr<ClassInfo> classInfo = nullptr;
+    std::shared_ptr<Scope> nsScope = nullptr;  //  Scope пространства имён (для Namespace)
 };
 
 struct Scope {
@@ -56,6 +70,11 @@ public:
         current = inner;
     }
 
+    void pushScope(std::shared_ptr<Scope> scope) {
+        scope->parent = current;
+        current = scope;
+    }
+
     void exitScope() {
         if (current->parent)
             current = current->parent;
@@ -68,6 +87,8 @@ public:
         current->symbols[sym->name] = sym;
         return {};
     }
+
+    std::shared_ptr<Scope> currentScope() { return current; }
 
     std::shared_ptr<Symbol> resolve(const std::string& name) {
         for (auto scope = current; scope != nullptr; scope = scope->parent) {
@@ -90,6 +111,7 @@ class SemanticAnalyzer {
     SymbolTable table;
     std::vector<std::string> errors;
     std::shared_ptr<Type> currentReturnType;  //  Тип возврата текущей функции (для проверки return)
+    int loopDepth = 0;                         //  Глубина вложенности циклов (для break/continue)
 
     void registerBuiltins();                                    //  Регистрация print, len, input, exit, panic
     void collectTopLevel(const std::vector<Stmt*>& decls);      //  Первый проход — собираем имена top-level объявлений

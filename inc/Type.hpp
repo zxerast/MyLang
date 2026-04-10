@@ -14,6 +14,7 @@ enum class TypeKind {
     Array,      // [T; N]
     DynArray,   // [T]
     Struct,
+    Class,
     Alias,
 };
 
