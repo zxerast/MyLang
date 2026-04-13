@@ -9,6 +9,8 @@ struct Parser {
 
     Parser(const std::vector<Token>& source) : source(source) {}
 
+    int curLine() const { return i < source.size() ? source[i].line : 0; }
+
     //  Разбирает имя типа: int, int[], int[3], int[][], int[3][4], Point и т.д.
     //  Сначала читает базовый тип, потом цепочку суффиксов [] или [N]
     //  Возвращает строковое представление: "int", "int[]", "int[3]", "int[][3]"
@@ -66,8 +68,10 @@ struct Parser {
 
         // нулевая инструкция ";"
         if (i < source.size() && source[i].type == TokenType::Separator){
+            auto* node = new ExprStmt();
+            node->line = curLine();
             i++;
-            return new ExprStmt();
+            return node;
         }
 
         if (i < source.size() && source[i].type == TokenType::Return){
@@ -84,6 +88,7 @@ struct Parser {
 
         // delete expr;
         if (i < source.size() && source[i].type == TokenType::Delete) {
+            int ln = curLine();
             i++; // съели 'delete'
             auto expr = parseEquasion();
             if (!expr) return std::unexpected(expr.error());
@@ -91,6 +96,7 @@ struct Parser {
                 return std::unexpected("Ошибка парсера: ожидался ';' после delete");
             i++; // съели ';'
             auto* node = new DeleteStmt();
+            node->line = ln;
             node->value = *expr;
             return node;
         }
@@ -117,6 +123,7 @@ struct Parser {
             i++;
 
             auto *node = new Assign;
+            node->line = (*e)->line;
             node->target = *e;
             node->value = *rhs;
             return node;
@@ -129,11 +136,13 @@ struct Parser {
         i++;
 
         auto *node = new ExprStmt;
+        node->line = (*e)->line;
         node->expr = *e;
         return node;
     }
 
     std::expected<Stmt*, std::string> parseIf(){
+        int ln = curLine();
         i++; // съели 'if'
 
         if (i >= source.size() || source[i].type != TokenType::LeftParen){
@@ -185,6 +194,7 @@ struct Parser {
         }
 
         auto* node = new If();
+        node->line = ln;
         node->condition = *cond;
         node->thenBranch = *thenBlock;
         node->elseBranch = elseStmt;
@@ -193,6 +203,7 @@ struct Parser {
     }
 
     std::expected<Stmt*, std::string> parseWhile(){
+        int ln = curLine();
         i++; // съели 'while'
 
         if (i >= source.size() || source[i].type != TokenType::LeftParen){
@@ -221,6 +232,7 @@ struct Parser {
         }
 
         auto* node = new While();
+        node->line = ln;
         node->condition = *cond;
         node->body = *body;
 
@@ -228,9 +240,11 @@ struct Parser {
     }
 
     std::expected<Stmt*, std::string> parseReturn(){
+        int ln = curLine();
         i++; // съели 'return'
 
         auto *node = new Return();
+        node->line = ln;
         node->value = nullptr;
 
         if (i < source.size() && source[i].type != TokenType::Separator){
@@ -252,6 +266,7 @@ struct Parser {
     }
 
     std::expected<Stmt*, std::string> parseBreak(){
+        int ln = curLine();
         i++; // съели 'break'
 
         if (i >= source.size() || source[i].type != TokenType::Separator){
@@ -259,10 +274,13 @@ struct Parser {
         }
         i++;
 
-        return new Break();
+        auto* node = new Break();
+        node->line = ln;
+        return node;
     }
 
     std::expected<Stmt*, std::string> parseContinue(){
+        int ln = curLine();
         i++; // съели 'continue'
 
         if (i >= source.size() || source[i].type != TokenType::Separator){
@@ -270,11 +288,14 @@ struct Parser {
         }
         i++;
 
-        return new Continue();
+        auto* node = new Continue();
+        node->line = ln;
+        return node;
     }
 
     std::expected<Stmt*, std::string> parseFuncDecl(){
         auto node = new FuncDecl;
+        node->line = curLine();
 
         {
             auto retType = parseTypeName();
@@ -346,6 +367,7 @@ struct Parser {
     }
 
     std::expected<Stmt*, std::string> parseStructDecl(){
+        int ln = curLine();
         i++; // съели 'struct'
 
         if (i >= source.size() || source[i].type != TokenType::Iden){
@@ -353,6 +375,7 @@ struct Parser {
         }
 
         auto *node = new StructDecl();
+        node->line = ln;
         node->name = source[i++].lexeme;
 
         if (i >= source.size() || source[i].type != TokenType::LeftBrace){
@@ -394,12 +417,14 @@ struct Parser {
     }
 
     std::expected<Stmt*, std::string> parseClassDecl(){
+        int ln = curLine();
         i++; // съели 'class'
 
         if (i >= source.size() || source[i].type != TokenType::Iden)
             return std::unexpected("Ошибка парсера: ожидалось имя класса");
 
         auto* node = new ClassDecl();
+        node->line = ln;
         node->name = source[i++].lexeme;
 
         if (i >= source.size() || source[i].type != TokenType::LeftBrace) {
@@ -436,6 +461,7 @@ struct Parser {
                 if (!body) { delete node; return std::unexpected(body.error()); }
 
                 auto* dtor = new FuncDecl();
+                dtor->line = ln;
                 dtor->returnType = "void";
                 dtor->name = "~" + node->name;
                 dtor->body = dynamic_cast<Block*>(*body);
@@ -484,6 +510,7 @@ struct Parser {
                 if (!body) { delete node; return std::unexpected(body.error()); }
 
                 auto* ctor = new FuncDecl();
+                ctor->line = ln;
                 ctor->returnType = "void";
                 ctor->name = node->name;
                 ctor->params = params;
@@ -532,6 +559,7 @@ struct Parser {
     }
 
     std::expected<Stmt*, std::string> parseTypeAlias(){
+        int ln = curLine();
         i++; // съели 'type'
 
         if (i >= source.size() || source[i].type != TokenType::Iden){
@@ -555,12 +583,14 @@ struct Parser {
         i++; // съели ';'
 
         auto *node = new TypeAlias();
+        node->line = ln;
         node->alias = alias;
         node->original = original;
         return node;
     }
 
     std::expected<Stmt*, std::string> parseNamespaceDecl(){
+        int ln = curLine();
         i++; // съели 'namespace'
 
         if (i >= source.size() || source[i].type != TokenType::Iden){
@@ -568,6 +598,7 @@ struct Parser {
         }
 
         auto *node = new NamespaceDecl();
+        node->line = ln;
         node->name = source[i++].lexeme;
 
         if (i >= source.size() || source[i].type != TokenType::LeftBrace){
@@ -614,6 +645,7 @@ struct Parser {
     }
 
     std::expected<Stmt*, std::string> parseImportDecl(){
+        int ln = curLine();
         i++; // съели 'import'
 
         if (i >= source.size() || source[i].type != TokenType::StringLit){
@@ -621,6 +653,7 @@ struct Parser {
         }
 
         auto *node = new ImportDecl();
+        node->line = ln;
         node->path = source[i++].lexeme;
 
         if (i >= source.size() || source[i].type != TokenType::Separator){
@@ -634,6 +667,9 @@ struct Parser {
 
     std::expected<Stmt*, std::string> parseTopDecl(){
         // export обёртка
+        if (i < source.size() && source[i].type == TokenType::Import){
+            return parseImportDecl();
+        }
         if (i < source.size() && source[i].type == TokenType::Export){
             i++; // съели 'export'
 
@@ -641,6 +677,7 @@ struct Parser {
             if (!inner) return inner;
 
             auto *node = new ExportDecl();
+            node->line = curLine();
             node->decl = *inner;
             return node;
         }
@@ -673,6 +710,7 @@ struct Parser {
 
     std::expected<Stmt*, std::string> parseVarDecl(){
         auto node = new VarDecl();
+        node->line = curLine();
 
         if (i < source.size() && source[i].type == TokenType::Const){
             i++;
@@ -724,6 +762,7 @@ struct Parser {
 
     std::expected<Block*, std::string> parseBlock(){
         auto block = new Block;
+        block->line = curLine();
 
         while (i < source.size() && (source[i].type != TokenType::RightBrace)){
             auto stmt = parseStatement();
@@ -765,6 +804,7 @@ struct Parser {
             }
 
             auto *node = new Binary();
+            node->line = result->line;
             node->op = Operand::Or;
             node->left = result;
             node->right = *right;
@@ -790,6 +830,7 @@ struct Parser {
             }
 
             auto *node = new Binary();
+            node->line = result->line;
             node->op = Operand::And;
             node->left = result;
             node->right = *right;
@@ -818,6 +859,7 @@ struct Parser {
             }
 
             auto *node = new Binary();
+            node->line = result->line;
             node->op = op;
             node->left = result;
             node->right = *right;
@@ -859,6 +901,7 @@ struct Parser {
             }
 
             auto *node = new Binary();
+            node->line = result->line;
             node->op = op;
             node->left = result;
             node->right = *right;
@@ -887,6 +930,7 @@ struct Parser {
             }
             
             auto *node = new Binary();
+            node->line = result->line;
             node->op = op;
             node->left = result;
             node->right = *right;
@@ -917,6 +961,7 @@ struct Parser {
             }
 
             auto *node = new Binary();
+            node->line = result->line;
             node->op = op;
             node->left = result;
             node->right = *right;
@@ -928,14 +973,16 @@ struct Parser {
     std::expected<Expr*, std::string> parseUnary(){
         if(i < source.size()){
             if (source[i].type == TokenType::Minus){
+                int ln = curLine();
                 i++;
                 auto right = parseUnary();
 
                 if (!right){
                     return std::unexpected(right.error());
                 }
-                
+
                 auto *node = new Unary();
+                node->line = ln;
                 node->op = Operand::UnaryMinus;
                 node->operand = *right;
                 return node;
@@ -945,6 +992,7 @@ struct Parser {
                 return parseUnary();
             }
             if (source[i].type == TokenType::Not){
+                int ln = curLine();
                 i++;
                 auto right = parseUnary();
 
@@ -953,6 +1001,7 @@ struct Parser {
                 }
 
                 auto *node = new Unary();
+                node->line = ln;
                 node->op = Operand::Not;
                 node->operand = *right;
                 return node;
@@ -978,6 +1027,7 @@ struct Parser {
                 }
 
                 auto *node = new FieldAccess();
+                node->line = result->line;
                 node->object = result;
                 node->field = source[i++].lexeme;
                 result = node;
@@ -997,6 +1047,7 @@ struct Parser {
                 i++; // съели ']'
 
                 auto *node = new ArrayAccess();
+                node->line = result->line;
                 node->object = result;
                 node->index = *index;
                 result = node;
@@ -1006,6 +1057,7 @@ struct Parser {
                 i++; // съели '('
 
                 auto *node = new FuncCall();
+                node->line = result->line;
                 node->callee = result;
 
                 // парсим аргументы: expr, expr, ...
@@ -1040,6 +1092,7 @@ struct Parser {
                 i++; // съели '++'
 
                 auto *node = new Unary();
+                node->line = result->line;
                 node->op = Operand::Increment;
                 node->operand = result;
                 result = node;
@@ -1049,6 +1102,7 @@ struct Parser {
                 i++; // съели '--'
 
                 auto *node = new Unary();
+                node->line = result->line;
                 node->op = Operand::Decrement;
                 node->operand = result;
                 result = node;
@@ -1070,6 +1124,7 @@ struct Parser {
         // числовой литерал
         if (source[i].type == TokenType::Number){
             auto *node = new Number();
+            node->line = curLine();
             node->isFloat = (source[i].subType == SubType::Float);
             node->value = std::stod(source[i++].lexeme);
             return node;
@@ -1078,6 +1133,7 @@ struct Parser {
         // строковый литерал
         if (source[i].type == TokenType::StringLit){
             auto *node = new String();
+            node->line = curLine();
             node->value = source[i++].lexeme;
             return node;
         }
@@ -1085,12 +1141,14 @@ struct Parser {
         // булев литерал
         if (source[i].type == TokenType::BoolLit){
             auto *node = new Bool();
+            node->line = curLine();
             node->value = (source[i++].lexeme == "true");
             return node;
         }
 
         // cast<type>(expr)
         if (source[i].type == TokenType::Cast){
+            int ln = curLine();
             i++; // съели 'cast'
 
             if (i >= source.size() || source[i].type != TokenType::Less){
@@ -1124,6 +1182,7 @@ struct Parser {
             i++; // съели ')'
 
             auto *node = new CastExpr();
+            node->line = ln;
             node->targetType = targetType;
             node->value = *expr;
             return node;
@@ -1131,11 +1190,13 @@ struct Parser {
 
         // new ClassName(args...)
         if (source[i].type == TokenType::New) {
+            int ln = curLine();
             i++; // съели 'new'
 
             if (i >= source.size() || source[i].type != TokenType::Iden)
                 return std::unexpected("Ошибка парсера: ожидалось имя класса после 'new'");
             auto* node = new NewExpr();
+            node->line = ln;
             node->className = source[i++].lexeme;
 
             if (i >= source.size() || source[i].type != TokenType::LeftParen) {
@@ -1166,6 +1227,7 @@ struct Parser {
 
         // идентификатор, namespace access, struct literal
         if (source[i].type == TokenType::Iden){
+            int ln = curLine();
             std::string name = source[i++].lexeme;
 
             // iden "::" iden — доступ к namespace
@@ -1177,6 +1239,7 @@ struct Parser {
                 }
 
                 auto *node = new NamespaceAccess();
+                node->line = ln;
                 node->nameSpace = name;
                 node->member = source[i++].lexeme;
                 return node;
@@ -1187,6 +1250,7 @@ struct Parser {
                 i++; // съели '{'
 
                 auto *node = new StructLiteral();
+                node->line = ln;
                 node->name = name;
 
                 if (i < source.size() && source[i].type != TokenType::RightBrace){
@@ -1230,15 +1294,18 @@ struct Parser {
 
             // просто идентификатор
             auto *node = new Identifier();
+            node->line = ln;
             node->name = name;
             return node;
         }
 
         // "[" expr_list "]" — литерал массива
         if (source[i].type == TokenType::LeftBracket){
+            int ln = curLine();
             i++; // съели '['
 
             auto *node = new ArrayLiteral();
+            node->line = ln;
 
             if (i < source.size() && source[i].type != TokenType::RightBracket){
                 while (true){

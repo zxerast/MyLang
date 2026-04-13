@@ -3,6 +3,7 @@
 #include "Type.hpp"
 #include <string>
 #include <vector>
+#include <unordered_set>
 #include <unordered_map>
 #include <memory>
 #include <expected>
@@ -106,21 +107,29 @@ struct Program;
 struct Stmt;
 struct Expr;
 struct Block;
+struct ImportDecl;
 
 class SemanticAnalyzer {
     SymbolTable table;
     std::vector<std::string> errors;
     std::shared_ptr<Type> currentReturnType;  //  Тип возврата текущей функции (для проверки return)
     int loopDepth = 0;                         //  Глубина вложенности циклов (для break/continue)
+    std::string currentFilePath;               //  Путь текущего файла (для разрешения import)
+    std::unordered_set<std::string> importedFiles;  //  Множество уже импортированных файлов (защита от циклов)
 
     void registerBuiltins();                                    //  Регистрация print, len, input, exit, panic
     void collectTopLevel(const std::vector<Stmt*>& decls);      //  Первый проход — собираем имена top-level объявлений
     std::shared_ptr<Type> resolveTypeName(const std::string& name);  //  Преобразование строки типа в Type
+    void processImport(ImportDecl* imp);                        //  Загрузка и анализ импортируемого файла
+
+    void error(int line, const std::string& msg) {
+        errors.push_back("line " + std::to_string(line) + ": " + msg);
+    }
 
     std::shared_ptr<Type> analyzeExpr(Expr* expr);  // Анализ выражения, возвращает его тип
     void analyzeStmt(Stmt* stmt);                   // Анализ одной инструкции
     void analyzeBlock(Block* block);                // Анализ блока (вход/выход из scope)
 
 public:
-    std::expected<void, std::string> analyze(Program* program);  // Точка входа
+    std::expected<void, std::string> analyze(Program* program, const std::string& filePath);  // Точка входа
 };

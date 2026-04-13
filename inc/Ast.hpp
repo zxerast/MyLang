@@ -1,10 +1,12 @@
+#pragma once
+
 #include "Tokens.hpp"
 #include "Type.hpp"
 #include <expected>
-#include <fstream>
 #include <memory>
 
 struct ASTNode{
+    int line = 0;       // Номер строки в исходнике (из токена)
     virtual ~ASTNode() = default;
 };
 
@@ -199,8 +201,6 @@ struct Program : ASTNode{
     std::vector<Stmt*> decls;
 };
 
-// Функции 
+// Функции
 
 std::expected<std::vector<Stmt*>, std::string> parse(const std::vector<Token>& source);
-std::expected<void, std::string> compile(Expr *head, std::ofstream &file);
-std::expected<void, std::string> generate(const std::vector<Expr*>& nodes, std::ofstream &file);

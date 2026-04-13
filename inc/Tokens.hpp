@@ -87,7 +87,7 @@ struct Token {
     TokenType type;  // Один токен типа выше
     SubType subType;
     std::string lexeme; // Токен в виде строки
-    // int line; // Номер строки для отслеживания ошибок
+    int line = 0;       // Номер строки для отслеживания ошибок
 
     Token(){
         this->type = TokenType::End;

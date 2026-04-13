@@ -117,14 +117,16 @@ Token typeIdentifier(const std::string& elem){
 
 std::expected<std::vector<Token>, std::string> tokenize(const std::string& source){
     std::vector<Token> res;
+    int line = 1;
 
     for(size_t i = 0; i < source.size(); i++){
         bool hasDot = false;
+        size_t prevSize = res.size();
         switch (source[i]){
             case ' ':
             case '\t':
-            case '\n':
             case '\r': break;
+            case '\n': line++; break;
             case '*': res.emplace_back(TokenType::Multiply, std::string(1,  '*')); break;
             case '%': res.emplace_back(TokenType::Modulo, std::string(1, '%')); break;
             case '(': res.emplace_back(TokenType::LeftParen, std::string(1, '(')); break;
@@ -284,8 +286,11 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
                 }
                 break;
         }
+        if (res.size() > prevSize)
+            res.back().line = line;
     }
     res.emplace_back(TokenType::End, std::string(1, ' '));
+    res.back().line = line;
 
     return res;
 }

@@ -2,8 +2,10 @@
 #include <vector>
 #include <fstream>
 #include <sstream>
+#include <filesystem>
 #include "Ast.hpp"
 #include "SymbolTable.hpp"
+#include "CodeGen.hpp"
 
 int main(int argc, char* argv[]){
     if (argc < 2){
@@ -36,9 +38,18 @@ int main(int argc, char* argv[]){
 
     //  Семантический анализ
     SemanticAnalyzer analyzer;
-    auto result = analyzer.analyze(&program);
+    auto result = analyzer.analyze(&program, argv[1]);
     if (!result) {
         std::cerr << result.error() << "\n";
+        return 1;
+    }
+
+    //  Кодогенерация — имя исполняемого файла = имя исходника без расширения
+    std::string outPath = std::filesystem::path(argv[1]).stem().string();
+    CodeGen codegen;
+    auto codegenResult = codegen.generate(&program, outPath);
+    if (!codegenResult) {
+        std::cerr << codegenResult.error() << "\n";
         return 1;
     }
 
