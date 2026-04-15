@@ -458,7 +458,10 @@ struct Parser {
                 i++; // съели '{'
 
                 auto body = parseBlock();
-                if (!body) { delete node; return std::unexpected(body.error()); }
+                if (!body) { 
+                    delete node; 
+                    return std::unexpected(body.error()); 
+                }
 
                 auto* dtor = new FuncDecl();
                 dtor->line = ln;
@@ -648,13 +651,40 @@ struct Parser {
         int ln = curLine();
         i++; // съели 'import'
 
-        if (i >= source.size() || source[i].type != TokenType::StringLit){
-            return std::unexpected("Ошибка парсера: ожидался путь к модулю после 'import'");
+        if (i >= source.size()){
+            return std::unexpected("Ошибка парсера: ожидался путь после 'import'");
         }
 
         auto *node = new ImportDecl();
         node->line = ln;
-        node->path = source[i++].lexeme;
+
+        if (source[i].type == TokenType::Less){
+            //  C-импорт: import <header.h>
+            node->isC = true;
+            i++; // съели '<'
+            std::string header;
+            while (i < source.size() && source[i].type != TokenType::Greater){
+                header += source[i].lexeme;
+                i++;
+            }
+            if (i >= source.size()){
+                delete node;
+                return std::unexpected("Ошибка парсера: ожидался '>' в C-импорте");
+            }
+            i++; // съели '>'
+            if (header.empty()){
+                delete node;
+                return std::unexpected("Ошибка парсера: пустой путь в C-импорте");
+            }
+            node->path = header;
+        }
+        else if (source[i].type == TokenType::StringLit){
+            node->path = source[i++].lexeme;
+        }
+        else {
+            delete node;
+            return std::unexpected("Ошибка парсера: ожидался путь к модулю после 'import'");
+        }
 
         if (i >= source.size() || source[i].type != TokenType::Separator){
             delete node;

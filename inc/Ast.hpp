@@ -189,7 +189,8 @@ struct NamespaceDecl : Stmt{
 };
 
 struct ImportDecl : Stmt{
-    std::string path;   // "math.lang"
+    std::string path;   // "math.lang" или "stdio.h"
+    bool isC = false;   // true для import <header.h>
 };
 
 struct ExportDecl : Stmt{

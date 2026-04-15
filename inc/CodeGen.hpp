@@ -29,6 +29,8 @@ class CodeGen {
 
     int labelCounter = 0;           //  Счётчик для уникальных меток .L0, .L1, ...
     int stringCounter = 0;          //  Счётчик строковых литералов .str0, .str1, ...
+    int arrayCounter  = 0;          //  Счётчик литералов массивов
+    int structCounter = 0;          //  Счётчик временных слотов для структур/классов
 
     //  Текущая функция
     std::unordered_map<std::string, LocalVar> locals;
@@ -38,6 +40,11 @@ class CodeGen {
 
     //  Пул строковых литералов: текст → метка
     std::unordered_map<std::string, std::string> stringPool;
+
+    //  Layout структур/классов: {struct_name → {field_name → offset}}. Поле = qword.
+    std::unordered_map<std::string, std::unordered_map<std::string, int>> structLayouts;
+    //  Суммарный размер типа структуры/класса в байтах
+    std::unordered_map<std::string, int> structSizes;
 
     //  ─── Helper'ы ───
     void emit(const std::string& line);         //  Пишет строку в .text с отступом
@@ -51,6 +58,15 @@ class CodeGen {
     //  Выделение локальной переменной в текущем фрейме
     int allocLocal(const std::string& name, const std::shared_ptr<Type>& type);
     const LocalVar* findLocal(const std::string& name) const;
+
+    //  Компиляция функции: пролог, параметры, тело, эпилог
+    void compileFunction(FuncDecl* fn);
+    //  Первый проход: суммарный размер локалок в теле (8-байтное выравнивание)
+    int countLocalsSize(Stmt* s);
+    //  Компиляция одного стейтмента
+    void compileStmt(Stmt* s);
+    //  Компиляция выражения — результат в rax (для int/ptr)
+    void compileExpr(Expr* e);
 
     //  Финальная сборка: склеивает секции, пишет .asm, вызывает nasm + ld
     std::expected<void, std::string> finalize(const std::string& outPath);

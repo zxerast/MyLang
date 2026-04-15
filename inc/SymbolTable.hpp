@@ -8,10 +8,10 @@
 #include <memory>
 #include <expected>
 
-struct Scope;     //  forward declaration для nsScope в Symbol
+struct Scope;     //  forward declaration для namespace_scope в Symbol
 struct FuncInfo;  //  forward declaration для ClassInfo
 
-enum class SymbolKind {
+enum class SymbolKind { //  Что есть наш символ
     Variable,
     Function,
     Struct,
@@ -20,38 +20,40 @@ enum class SymbolKind {
     Namespace,
 };
 
-struct StructInfo {
+struct StructInfo { //  Структура
     std::string name;   //  Имя структуры
     std::vector<std::pair<std::string, std::shared_ptr<Type>>> fields;  // массив пар: имя поля -> тип
 };
 
-struct ClassInfo {
-    std::string name;
-    std::vector<std::pair<std::string, std::shared_ptr<Type>>> fields;
-    std::unordered_map<std::string, std::shared_ptr<FuncInfo>> methods;  //  имя → сигнатура
-    std::shared_ptr<FuncInfo> constructor = nullptr;
+struct ClassInfo {  //  Класс
+    std::string name;   //  Имя класса
+    std::vector<std::pair<std::string, std::shared_ptr<Type>>> fields;  //  Поля как в структуре
+    std::unordered_map<std::string, std::shared_ptr<FuncInfo>> methods;  //  Методы
+    std::shared_ptr<FuncInfo> constructor = nullptr;    //  Указатель на конструктор
     bool hasDestructor = false;
 };
 
-struct FuncInfo {
-    std::shared_ptr<Type> returnType;
+struct FuncInfo {   //  Функция
+    std::shared_ptr<Type> returnType;   //  Чё возвращает
     std::vector<std::pair<std::string, std::shared_ptr<Type>>> params;  // имя параметра -> тип
+    bool isExternC = false;   //  Импортирована из C-заголовка (линкуется через extern)
+    bool isVariadic = false;  //  Функция принимает сколько угодно параметров?  
 };
 
-struct Symbol {
-    std::string name;   
+struct Symbol { //  Символ кода
+    std::string name;   //  Имя
     SymbolKind kind;    //  Что за этим именем стоит
-    std::shared_ptr<Type> type;       // тип переменной / возвращаемый тип функции
+    std::shared_ptr<Type> type;       // тип переменной или возвращаемый тип функции
 
     bool isConst = false;
     bool isExported = false;
     bool isInitialized = false;
 
-    // Доп. информация в зависимости от kind
-    std::shared_ptr<FuncInfo> funcInfo = nullptr;
-    std::shared_ptr<StructInfo> structInfo = nullptr;
-    std::shared_ptr<ClassInfo> classInfo = nullptr;
-    std::shared_ptr<Scope> nsScope = nullptr;  //  Scope пространства имён (для Namespace)
+    // Информация в зависимости от контекста, за раз может быть заполнен только один указатель
+    std::shared_ptr<FuncInfo> funcInfo = nullptr;    // Данные функции 
+    std::shared_ptr<StructInfo> structInfo = nullptr;   // Данные структуры
+    std::shared_ptr<ClassInfo> classInfo = nullptr; //  Данные класса
+    std::shared_ptr<Scope> namespaceScope = nullptr;  //  Scope пространства имён (для Namespace)
 };
 
 struct Scope {
@@ -59,49 +61,51 @@ struct Scope {
     std::shared_ptr<Scope> parent = nullptr;    //  Ссылка на внешнюю область
 };
 
-class SymbolTable {
+class SymbolTable { //  Таблица символов области видимости
     std::shared_ptr<Scope> current;     //      Указатель на текущую область видимости
 
 public:
-    SymbolTable() : current(std::make_shared<Scope>()) {}
+    SymbolTable() : current(std::make_shared<Scope>()) {}   //  Сразу же создаём глобальную область видимости
 
     void enterScope() {
         auto inner = std::make_shared<Scope>();     //  Вошли в новую
         inner->parent = current;    //  Ставим текущую как родителя
-        current = inner;
+        current = inner;    //  А внутреннюю как текущую
     }
 
     void pushScope(std::shared_ptr<Scope> scope) {
-        scope->parent = current;
+        scope->parent = current;    //  Закидываем новую область видимости в текущую
         current = scope;
     }
 
     void exitScope() {
-        if (current->parent)
+        if (current->parent)    //  Возвращаемся на уровень выше, родительскую область видимости
             current = current->parent;
     }
 
     std::expected<void, std::string> declare(std::shared_ptr<Symbol> sym) {     // Объявляем символ в текущем scope
-        if (current->symbols.contains(sym->name))   // Возвращает ошибку если имя уже занято в этом же scope
+        if (current->symbols.contains(sym->name)) {  // Возвращает ошибку если имя уже занято в этом же scope
             return std::unexpected("'" + sym->name + "' is already declared in this scope");
-
-        current->symbols[sym->name] = sym;
+        }
+        current->symbols[sym->name] = sym;  //  Иначе закидываем в текущий Scope
         return {};
     }
 
-    std::shared_ptr<Scope> currentScope() { return current; }
+    std::shared_ptr<Scope> currentScope() { 
+        return current; 
+    }
 
     std::shared_ptr<Symbol> resolve(const std::string& name) {
         for (auto scope = current; scope != nullptr; scope = scope->parent) {
             auto it = scope->symbols.find(name);    // Найти символ по имени, поднимаясь по цепочке scope
             if (it != scope->symbols.end())
-                return it->second;
+                return it->second;  //  Возвращаем значение по имени символа
         }
         return nullptr;     // Если не найдём
     }
 };
 
-// Семантический анализатор (реализация в Semantic.cpp)
+// Семантический анализатор 
 
 struct Program;
 struct Stmt;
@@ -110,9 +114,9 @@ struct Block;
 struct ImportDecl;
 
 class SemanticAnalyzer {
-    SymbolTable table;
-    std::vector<std::string> errors;
-    std::shared_ptr<Type> currentReturnType;  //  Тип возврата текущей функции (для проверки return)
+    SymbolTable table;  //  Создание таблицы символов
+    std::vector<std::string> errors;    //  Вектор ошибок
+    std::shared_ptr<Type> currentReturnType;  //  Тип возврата текущей функции 
     int loopDepth = 0;                         //  Глубина вложенности циклов (для break/continue)
     std::string currentFilePath;               //  Путь текущего файла (для разрешения import)
     std::unordered_set<std::string> importedFiles;  //  Множество уже импортированных файлов (защита от циклов)
@@ -120,13 +124,14 @@ class SemanticAnalyzer {
     void registerBuiltins();                                    //  Регистрация print, len, input, exit, panic
     void collectTopLevel(const std::vector<Stmt*>& decls);      //  Первый проход — собираем имена top-level объявлений
     std::shared_ptr<Type> resolveTypeName(const std::string& name);  //  Преобразование строки типа в Type
-    void processImport(ImportDecl* imp);                        //  Загрузка и анализ импортируемого файла
+    void processImport(ImportDecl* imports);                        //  Загрузка и анализ импортируемого файла
+    void processCImport(ImportDecl* imp);                           //  Парсинг C-заголовка через libclang
 
-    void error(int line, const std::string& msg) {
-        errors.push_back("line " + std::to_string(line) + ": " + msg);
+    void error(int line, const std::string& message) {
+        errors.push_back("line " + std::to_string(line) + ": " + message);  //  Все найденные ошибки записываем 
     }
 
-    std::shared_ptr<Type> analyzeExpr(Expr* expr);  // Анализ выражения, возвращает его тип
+    std::shared_ptr<Type> analyzeExpr(Expr* expr, std::shared_ptr<Type> expected = nullptr);  // expected — ожидаемый тип из контекста для контекстной типизации литералов
     void analyzeStmt(Stmt* stmt);                   // Анализ одной инструкции
     void analyzeBlock(Block* block);                // Анализ блока (вход/выход из scope)
 
