@@ -10,17 +10,17 @@
 // функции для работы с типами
 
 static std::shared_ptr<Type> makeType(TypeKind kind) {  //  Определение сущности типа
-    auto t = std::make_shared<Type>();  
-    t->kind = kind;
-    return t;
+    auto type = std::make_shared<Type>();
+    type->kind = kind;
+    return type;
 }
 
 static std::shared_ptr<Type> makeArrayType(std::shared_ptr<Type> elem, int size) {  // Тоже самое для массивов
-    auto t = std::make_shared<Type>();
-    t->kind = TypeKind::Array;
-    t->elementType = elem;  //  Тип массива определяем по первому элементу
-    t->arraySize = size;
-    return t;
+    auto type = std::make_shared<Type>();
+    type->kind = TypeKind::Array;
+    type->elementType = elem;  //  Тип массива определяем по первому элементу
+    type->arraySize = size;
+    return type;
 }
 
 static bool typesEqual(const std::shared_ptr<Type>& a, const std::shared_ptr<Type>& b) {
@@ -199,17 +199,20 @@ static std::shared_ptr<Type> commonType(const std::shared_ptr<Type>& a, const st
 
     //  Оба signed int — берём больший
     if (a->kind >= TypeKind::Int8 && a->kind <= TypeKind::Int64 && b->kind >= TypeKind::Int8 && b->kind <= TypeKind::Int64) {
-        return typeRank(a) >= typeRank(b) ? a : b;
+        if (typeRank(a) >= typeRank(b)) return a;
+        return b;
     }
 
     //  Оба unsigned int — берём больший
     if (a->kind >= TypeKind::Uint8 && a->kind <= TypeKind::Uint64 && b->kind >= TypeKind::Uint8 && b->kind <= TypeKind::Uint64) {
-        return typeRank(a) >= typeRank(b) ? a : b;
+        if (typeRank(a) >= typeRank(b)) return a;
+        return b;
     }
 
     //  Оба float — берём больший
     if (isFloatType(a) && isFloatType(b)) {
-        return typeRank(a) >= typeRank(b) ? a : b;
+        if (typeRank(a) >= typeRank(b)) return a;
+        return b;
     }
 
     //  int/uint + float → float64
@@ -598,19 +601,84 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
         std::vector<std::shared_ptr<Type>> argTypes;
         for (size_t i = 0; i < call->args.size(); i++) {
             std::shared_ptr<Type> expectedArg = nullptr;
-            if (sym->funcInfo && callee->name != "print" && callee->name != "len" && i < sym->funcInfo->params.size()) {
-                expectedArg = sym->funcInfo->params[i].second;  //  print и len особые случаи которые не выражаются общей семантикой
+            if (sym->funcInfo && callee->name != "print" && callee->name != "len" && callee->name != "push" && callee->name != "pop" && i < sym->funcInfo->params.size()) {
+                expectedArg = sym->funcInfo->params[i].second;  //  print/len/push/pop — особые случаи, проверяются отдельно
             }
             argTypes.push_back(analyzeExpr(call->args[i], expectedArg));
+        }
+
+        //  print(x1, x2, ...) — 1+ аргументов примитивного типа или строк, выводятся через пробел
+        if (callee->name == "print") {
+            if (argTypes.empty()) {
+                error(expr->line, "'print' expects at least 1 argument, got 0");
+            }
+            for (size_t i = 0; i < argTypes.size(); i++) {
+                if (!argTypes[i]) continue;
+                auto kind = argTypes[i]->kind;
+                bool isSupported = (kind == TypeKind::Bool || kind == TypeKind::String || kind == TypeKind::Char || kind == TypeKind::Int8  || kind == TypeKind::Int16 || kind == TypeKind::Int32 || kind == TypeKind::Int64 || kind == TypeKind::Uint8 || kind == TypeKind::Uint16 || kind == TypeKind::Uint32 || kind == TypeKind::Uint64);
+                if (!isSupported)
+                    error(expr->line, "'print' argument " + std::to_string(i + 1) + " has unsupported type '" + typeToString(argTypes[i]) + "'");
+            }
+            expr->resolvedType = makeType(TypeKind::Void);
+            return expr->resolvedType;
+        }
+
+        //  len(x) — массив (статический или динамический) либо строка, возвращает int32
+        if (callee->name == "len") {
+            if (argTypes.size() != 1) {
+                error(expr->line, "'len' expects 1 argument, got " + std::to_string(argTypes.size()));
+            }
+            else if (argTypes[0]) {
+                auto kind = argTypes[0]->kind;
+                if (kind != TypeKind::Array && kind != TypeKind::DynArray && kind != TypeKind::String)
+                    error(expr->line, "'len' argument must be an array or string, got '" + typeToString(argTypes[0]) + "'");
+            }
+            expr->resolvedType = makeType(TypeKind::Int32);
+            return expr->resolvedType;
+        }
+
+        //  push(arr: [T], elem: T) — добавить элемент в конец динамического массива
+        if (callee->name == "push") {
+            if (argTypes.size() != 2) {
+                error(expr->line, "'push' expects 2 arguments (array, element), got " + std::to_string(argTypes.size()));
+            }
+            else if (argTypes[0] && argTypes[0]->kind != TypeKind::DynArray) {
+                error(expr->line, "'push' first argument must be a dynamic array '[T]', got '" + typeToString(argTypes[0]) + "'");
+            }
+            else if (argTypes[0] && argTypes[1] && !isImplicitlyConvertible(argTypes[1], argTypes[0]->elementType)) {
+                error(expr->line, "'push' element type mismatch: cannot convert '" + typeToString(argTypes[1]) + "' to '" + typeToString(argTypes[0]->elementType) + "'");
+            }
+            expr->resolvedType = makeType(TypeKind::Void);
+            return expr->resolvedType;
+        }
+
+        //  pop(arr: [T]) -> T — удалить и вернуть последний элемент массива
+        if (callee->name == "pop") {
+            if (argTypes.size() != 1) {
+                error(expr->line, "'pop' expects 1 argument (array), got " + std::to_string(argTypes.size()));
+                return nullptr;
+            }
+            if (argTypes[0] && argTypes[0]->kind != TypeKind::DynArray) {
+                error(expr->line, "'pop' argument must be a dynamic array '[T]', got '" + typeToString(argTypes[0]) + "'");
+                return nullptr;
+            }
+            expr->resolvedType = argTypes[0] ? argTypes[0]->elementType : nullptr;
+            return expr->resolvedType;
         }
 
         //  Проверяем типы аргументов
         if (sym->funcInfo && callee->name != "print" && callee->name != "len") {
             bool variadic = sym->funcInfo->isVariadic;
             size_t fixed = sym->funcInfo->params.size();
-            bool arityOk = variadic ? (argTypes.size() >= fixed) : (argTypes.size() == fixed);  //  Может ли функция принимать сколько угодно параметров
+            bool arityOk;
+            if (variadic)
+                arityOk = argTypes.size() >= fixed;
+            else
+                arityOk = argTypes.size() == fixed;
             if (!arityOk) {
-                error(expr->line, "'" + callee->name + "' expects " + std::string(variadic ? "at least " : "") + std::to_string(fixed) + " arguments, got " + std::to_string(argTypes.size()));
+                std::string least;
+                if (variadic) least = "at least ";
+                error(expr->line, "'" + callee->name + "' expects " + least + std::to_string(fixed) + " arguments, got " + std::to_string(argTypes.size()));
             }
             else {  //  Типы фиксированных параметров
                 for (size_t j = 0; j < fixed; j++) {
@@ -621,9 +689,12 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             }
         }
 
-        //  Возвращаем тип возврата функции
-        if (sym->funcInfo)
+        //  Пробрасываем флаги в AST для кодгена
+        if (sym->funcInfo) {
+            call->isExternC = sym->funcInfo->isExternC;
+            call->isVariadic = sym->funcInfo->isVariadic;
             expr->resolvedType = sym->funcInfo->returnType;
+        }
         else
             expr->resolvedType = sym->type;
         return expr->resolvedType;
@@ -762,20 +833,20 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
     }
 
     //  Доступ через namespace std::expected
-    if (auto* namespace = dynamic_cast<NamespaceAccess*>(expr)) {
-        auto namespaceSym = table.resolve(namespace->nameSpace);    //  Ищем namespace в таблице
+    if (auto* namespase = dynamic_cast<NamespaceAccess*>(expr)) {
+        auto namespaceSym = table.resolve(namespase->nameSpace);    //  Ищем namespace в таблице
         if (!namespaceSym) {
-            error(expr->line, "'" + namespace->nameSpace + "' is not declared");
+            error(expr->line, "'" + namespase->nameSpace + "' is not declared");
             return nullptr;
         }
-        if (namespacesSym->kind != SymbolKind::Namespace || !namespaceSym->namespaceScope) {
-            error(expr->line, "'" + ns->nameSpace + "' is not a namespace");
+        if (namespaceSym->kind != SymbolKind::Namespace || !namespaceSym->namespaceScope) {
+            error(expr->line, "'" + namespase->nameSpace + "' is not a namespace");
             return nullptr;
         }
         //  Ищем member внутри scope namespace
-        auto it = namespaceSym->namespaceScope->symbols.find(namespace->member);
+        auto it = namespaceSym->namespaceScope->symbols.find(namespase->member);
         if (it == namespaceSym->namespaceScope->symbols.end()) {
-            error(expr->line, "'" + namespace->member + "' is not declared in namespace '" + namespace->nameSpace + "'");
+            error(expr->line, "'" + namespase->member + "' is not declared in namespace '" + namespase->nameSpace + "'");
             return nullptr;
         }
         expr->resolvedType = it->second->type;
@@ -798,7 +869,11 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             }
             for (size_t j = 0; j < newExpr->args.size(); j++) {
                 //  Пробрасываем тип параметра конструктора для контекстной типизации 
-                auto expectedArg = (j < constructorParams.size()) ? constructorParams[j].second : nullptr;
+                std::shared_ptr<Type> expectedArg;
+                if (j < constructorParams.size())
+                    expectedArg = constructorParams[j].second;
+                else
+                    expectedArg = nullptr;
                 auto argType = analyzeExpr(newExpr->args[j], expectedArg);
                 if (j < constructorParams.size() && argType && constructorParams[j].second) {
                     if (!isImplicitlyConvertible(argType, constructorParams[j].second)) {
@@ -1007,6 +1082,9 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         sym->kind = SymbolKind::Variable;
         sym->isConst = var->isConst;
         sym->isInitialized = (var->init != nullptr);    //  Инициализовано или нет
+        //  DynArray без инициализатора считается пустым массивом, а не «неинициализированным»
+        if (!sym->isInitialized && var->typeName.size() >= 2 && var->typeName.substr(var->typeName.size() - 2) == "[]")
+            sym->isInitialized = true;
 
         if (var->isAuto) {  //  auto — выводим тип из инициализатора (без контекста — литералы дают int32/float64)
             std::shared_ptr<Type> initType = analyzeExpr(var->init);
@@ -1039,7 +1117,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         auto result = table.declare(sym);   //  Сохраняем в таблицу символов
         if (!result) {
             error(stmt->line, result.error());
-        }s
+        }
     }
     else if (auto* block = dynamic_cast<Block*>(stmt)) {    //  Если это блок то соответственно анализируем блок
         analyzeBlock(block);
@@ -1114,8 +1192,12 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
     else if (auto* func = dynamic_cast<FuncDecl*>(stmt)) {  //  Объявление функции
         auto sym = table.resolve(func->name);   //  Имя уже зарегистрировано в collectTopLevel — здесь только анализ тела
         auto prevReturnType = currentReturnType;    //  Сохраняем предыдущий тип возврата и ставим текущий (для проверки return)
-        currentReturnType = (sym && sym->funcInfo) ? sym->funcInfo->returnType : nullptr;
-
+        if (sym && sym->funcInfo) {
+            currentReturnType = sym->funcInfo->returnType;
+        }
+        else {
+            currentReturnType = nullptr;
+        }
         table.enterScope();     //  Тело функции — новый scope, в который добавляем параметры с типами
         if (sym && sym->funcInfo) {
             for (size_t j = 0; j < func->params.size(); j++) {  //  Регистрируем параметры
@@ -1123,7 +1205,12 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                 paramSym->name = func->params[j].name;
                 paramSym->kind = SymbolKind::Variable;
                 paramSym->isInitialized = true;  //  параметры всегда инициализированы
-                paramSym->type = (j < sym->funcInfo->params.size()) ? sym->funcInfo->params[j].second : nullptr;
+                if (j < sym->funcInfo->params.size()) {
+                    paramSym->type = sym->funcInfo->params[j].second;
+                }
+                else {
+                    paramSym->type = nullptr;
+                }
 
                 auto paramResult = table.declare(paramSym);
                 if (!paramResult) {
@@ -1161,17 +1248,20 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         selfieldType->name = clas->name;
 
         for (auto* method : clas->methods) {    //  Анализируем тела методов
-            auto prevRetType = currentReturnType;
+            auto prevRetType = currentReturnType;   //  Сохраняем предыдущий тип возврата
             auto currMethod = classSym->classInfo->methods.find(method->name);
-            currentReturnType = (currMethod != classSym->classInfo->methods.end()) ? currMethod->second->returnType : nullptr;
+            if (currMethod != classSym->classInfo->methods.end())
+                currentReturnType = currMethod->second->returnType; //  Ставим текущий тип возврата на тип метода
+            else
+                currentReturnType = nullptr;
 
-            table.enterScope();  //  Добавляем self
-            auto selfSym = std::make_shared<Symbol>();
-            selfSym->name = "self";
+            table.enterScope();  //  Заходим в тело
+            auto selfSym = std::make_shared<Symbol>();  //  Внутри метода мы можем обращаться к экземплярам класса через self
+            selfSym->name = "self"; //  self неявно дописывается семантикой и является частным случаем обращения к полю 
             selfSym->kind = SymbolKind::Variable;
-            selfSym->type = selfieldType;
+            selfSym->type = selfieldType;   //  Ставим тип
             selfSym->isInitialized = true;
-            table.declare(selfSym);
+            table.declare(selfSym); //  Сохраняем
 
             //  Добавляем параметры
             if (currMethod != classSym->classInfo->methods.end()) {
@@ -1180,29 +1270,32 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                     paramSym->name = method->params[j].name;
                     paramSym->kind = SymbolKind::Variable;
                     paramSym->isInitialized = true;
-                    paramSym->type = (j < currMethod->second->params.size()) ? currMethod->second->params[j].second : nullptr;
+                    if (j < currMethod->second->params.size())
+                        paramSym->type = currMethod->second->params[j].second;
+                    else
+                        paramSym->type = nullptr;
                     table.declare(paramSym);
                 }
             }
 
-            for (auto* stmt : method->body->statements) {
+            for (auto* stmt : method->body->statements) {   //  Остальное тело метода
                 analyzeStmt(stmt);
             }
             table.exitScope();
 
-            if (currentReturnType && currentReturnType->kind != TypeKind::Void) {
+            if (currentReturnType && currentReturnType->kind != TypeKind::Void) {   //  Не void метод как и функция обязан что-то вернуть
                 if (!alwaysReturns(method->body)) {
-                    error(stmt->line, "method '" + cls->name + "." + method->name + "' does not return a value on all paths");
+                    error(stmt->line, "method '" + clas->name + "." + method->name + "' does not return a value on all paths");
                 }
             }
-            currentReturnType = prevRetType;
+            currentReturnType = prevRetType;    //  Возвращаем предыдущий тип возврата
         }
 
         //  Анализируем тело конструктора
         if (clas->constructor) {
             auto prevRetType = currentReturnType;
-            currentReturnType = makeType(TypeKind::Void);
-
+            currentReturnType = makeType(TypeKind::Void);   //  Конструктор всегда возвращает void
+                                                            //  Класс можно получить только через new Class(x, y)
             table.enterScope();
             auto selfSym = std::make_shared<Symbol>();
             selfSym->name = "self";
@@ -1217,7 +1310,10 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                     paramSym->name = clas->constructor->params[j].name;
                     paramSym->kind = SymbolKind::Variable;
                     paramSym->isInitialized = true;
-                    paramSym->type = (j < classSym->classInfo->constructor->params.size()) ? classSym->classInfo->constructor->params[j].second : nullptr;
+                    if (j < classSym->classInfo->constructor->params.size())
+                        paramSym->type = classSym->classInfo->constructor->params[j].second;
+                    else
+                        paramSym->type = nullptr;
                     table.declare(paramSym);
                 }
             }
@@ -1259,7 +1355,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         auto namespaceSym = table.resolve(namespase->name);
         if (namespaceSym && namespaceSym->namespaceScope) {
             table.pushScope(namespaceSym->namespaceScope);
-            for (auto* decl : namespace->decls) {
+            for (auto* decl : namespase->decls) {
                 analyzeStmt(decl);
             }
             table.exitScope();
@@ -1270,148 +1366,161 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
     }
 }
 
-//  Преобразование типа из libclang в тип MyLang.
-//  Возвращает nullptr, если тип не поддерживается (struct/union по значению и т.п.).
-static std::shared_ptr<Type> mapCType(CXType ct) {
-    CXType canon = clang_getCanonicalType(ct);
+//  Преобразование типа из libclang в поддерживаемый нами тип
+//  Возвращает nullptr, если тип не поддерживается
+static std::shared_ptr<Type> mapCType(CXType cType) {
+    CXType canon = clang_getCanonicalType(cType);   //  Берём самый базовый тип в обход синонимов и прочих обёрток
+
+    if (canon.kind == CXType_Pointer) {     //  Указатели обрабатываем отдельно
+        CXType pointer = clang_getCanonicalType(clang_getPointeeType(canon));   //  Базовый тип на который ссылается указатель
+        
+        if (pointer.kind == CXType_Char_S || pointer.kind == CXType_SChar || pointer.kind == CXType_Char_U || pointer.kind == CXType_UChar) {
+            return makeType(TypeKind::String);  //  signed и unsigned char указатели -> это строка
+        }
+        return makeType(TypeKind::Uint64);  //  Любой другой указатель -> сырой адрес
+    }
+
+    //  Примитивные типы
     switch (canon.kind) {
-        case CXType_Void:      return [](){ auto t = std::make_shared<Type>(); t->kind = TypeKind::Void;    return t; }();
-        case CXType_Bool:      return [](){ auto t = std::make_shared<Type>(); t->kind = TypeKind::Bool;    return t; }();
+        case CXType_Void:       return makeType(TypeKind::Void);
+        case CXType_Bool:       return makeType(TypeKind::Bool);
+
         case CXType_Char_S:
         case CXType_SChar:
         case CXType_Char_U:
-        case CXType_UChar:     return [](){ auto t = std::make_shared<Type>(); t->kind = TypeKind::Int8;    return t; }();
-        case CXType_Short:     return [](){ auto t = std::make_shared<Type>(); t->kind = TypeKind::Int16;   return t; }();
-        case CXType_UShort:    return [](){ auto t = std::make_shared<Type>(); t->kind = TypeKind::Uint16;  return t; }();
-        case CXType_Int:       return [](){ auto t = std::make_shared<Type>(); t->kind = TypeKind::Int32;   return t; }();
-        case CXType_UInt:      return [](){ auto t = std::make_shared<Type>(); t->kind = TypeKind::Uint32;  return t; }();
+        case CXType_UChar:      return makeType(TypeKind::Int8);
+
+        case CXType_Short:      return makeType(TypeKind::Int16);
+        case CXType_UShort:     return makeType(TypeKind::Uint16);
+
+        case CXType_Int:        return makeType(TypeKind::Int32);
+        case CXType_UInt:       return makeType(TypeKind::Uint32);
+
         case CXType_Long:
-        case CXType_LongLong:  return [](){ auto t = std::make_shared<Type>(); t->kind = TypeKind::Int64;   return t; }();
+        case CXType_LongLong:   return makeType(TypeKind::Int64);
+
         case CXType_ULong:
-        case CXType_ULongLong: return [](){ auto t = std::make_shared<Type>(); t->kind = TypeKind::Uint64;  return t; }();
-        case CXType_Float:     return [](){ auto t = std::make_shared<Type>(); t->kind = TypeKind::Float32; return t; }();
-        case CXType_Double:    return [](){ auto t = std::make_shared<Type>(); t->kind = TypeKind::Float64; return t; }();
-        case CXType_Pointer: {
-            //  char*/const char* → String; любой другой указатель → Uint64 (сырой адрес)
-            CXType pointee = clang_getCanonicalType(clang_getPointeeType(canon));
-            if (pointee.kind == CXType_Char_S || pointee.kind == CXType_SChar
-             || pointee.kind == CXType_Char_U || pointee.kind == CXType_UChar) {
-                auto t = std::make_shared<Type>(); t->kind = TypeKind::String; return t;
-            }
-            auto t = std::make_shared<Type>(); t->kind = TypeKind::Uint64; return t;
-        }
-        default: return nullptr;
+        case CXType_ULongLong:  return makeType(TypeKind::Uint64);
+
+        case CXType_Float:      return makeType(TypeKind::Float32);
+        case CXType_Double:     return makeType(TypeKind::Float64);
+
+        default:                return nullptr;
     }
 }
 
+//  Проверяет, принадлежит ли курсор нужному заголовку (по basename файла)
+static bool isFromHeader(CXCursor cursor, const std::string& wantedBase) {
+    CXSourceLocation loc = clang_getCursorLocation(cursor);
+    CXFile file;
+    unsigned line, col, off;
+    clang_getFileLocation(loc, &file, &line, &col, &off);
+    if (!file) return false;
+
+    CXString fname = clang_getFileName(file);
+    std::string base = std::filesystem::path(clang_getCString(fname)).filename().string();
+    clang_disposeString(fname);
+    return base == wantedBase;
+}
+
+//  Извлекает имя курсора в std::string
+static std::string getCursorName(CXCursor cursor) {
+    CXString name = clang_getCursorSpelling(cursor);
+    std::string result = clang_getCString(name);
+    clang_disposeString(name);
+    return result;
+}
+
+//  Пытается создать символ MyLang из C-декларации функции.
+//  Возвращает nullptr, если типы параметров/возврата не поддерживаются.
+static std::shared_ptr<Symbol> makeCFuncSymbol(CXCursor cursor) {
+    //  Маппим возвращаемый тип
+    auto retType = mapCType(clang_getCursorResultType(cursor));
+    if (!retType) return nullptr;
+
+    //  Маппим параметры
+    int nargs = clang_Cursor_getNumArguments(cursor);
+    auto info = std::make_shared<FuncInfo>();
+    info->returnType = retType;
+    info->isExternC = true;
+    info->isVariadic = clang_Cursor_isVariadic(cursor);
+
+    for (int i = 0; i < nargs; i++) {
+        CXCursor arg = clang_Cursor_getArgument(cursor, i);
+        auto paramType = mapCType(clang_getCursorType(arg));
+        if (!paramType) return nullptr;
+        info->params.push_back({getCursorName(arg), paramType});
+    }
+
+    //  Создаём символ
+    auto sym = std::make_shared<Symbol>();
+    sym->name = getCursorName(cursor);
+    sym->kind = SymbolKind::Function;
+    sym->type = retType;
+    sym->funcInfo = info;
+    sym->isInitialized = true;
+    return sym;
+}
+
 void SemanticAnalyzer::processCImport(ImportDecl* imp) {
-    //  Виртуальный TU: единственный файл с #include <header>
-    std::string stub = "#include <" + imp->path + ">\n";
-    const char* virtualName = "__mylang_cimport.c";
+    std::string stub = "#include <" + imp->path + ">\n";    //  Создаём виртуальный файл с единственной строкой #include <header>
+    const char* virtualName = "cImport.c";     //  Читать будем с этого виртуального файла чтобы не создавать временный
 
-    CXUnsavedFile unsaved;
+    CXUnsavedFile unsaved;  //  unsaved позволяет читать не с диска, а с файла
     unsaved.Filename = virtualName;
-    unsaved.Contents = stub.c_str();
-    unsaved.Length   = (unsigned long)stub.size();
+    unsaved.Contents = stub.c_str();    //  Берём указатель на данные библиотеки
+    unsaved.Length = stub.size();
 
-    const char* args[] = {"-x", "c"};
-
-    CXIndex index = clang_createIndex(0, 0);
-    CXTranslationUnit tu = nullptr;
-    CXErrorCode ec = clang_parseTranslationUnit2(
-        index, virtualName, args, 2, &unsaved, 1,
-        CXTranslationUnit_SkipFunctionBodies, &tu);
-
-    if (ec != CXError_Success || !tu) {
+    CXIndex index = clang_createIndex(0, 0);    //  Создание текущей сессии для Си компилятора, без этого не будет работать
+    CXTranslationUnit res = nullptr;    //  Сюда положим результат парсинга
+    const char* args[] = {"-x", "c"};   //  -x, c - означает что язык всегда Си вне зависимости от разрешения файла
+    CXErrorCode err = clang_parseTranslationUnit2(index, virtualName, args, 2, &unsaved, 1, CXTranslationUnit_SkipFunctionBodies, &res);
+    //  Парсим функции без тел. 
+    if (err != CXError_Success || !res) {   
         error(imp->line, "libclang failed to parse header '" + imp->path + "'");
         clang_disposeIndex(index);
         return;
     }
 
-    //  Для фильтрации — берём basename заголовка
     std::string wantedBase = std::filesystem::path(imp->path).filename().string();
+    CImportVisitorCtx ctx{wantedBase, &table, 0, 0};    
 
-    struct Ctx {
-        std::string wantedBase;
-        SymbolTable* table;
-        int registered = 0;
-        int skipped = 0;
-    };
-    Ctx ctx{wantedBase, &table, 0, 0};
+    CXCursor root = clang_getTranslationUnitCursor(res);
+    clang_visitChildren(root, [](CXCursor cursor, CXCursor, CXClientData data) -> CXChildVisitResult {
+            auto* ctx = (CImportVisitorCtx*)data;
 
-    CXCursor root = clang_getTranslationUnitCursor(tu);
-    clang_visitChildren(root,
-        [](CXCursor c, CXCursor, CXClientData data) -> CXChildVisitResult {
-            auto* ctx = (Ctx*)data;
-            if (clang_getCursorKind(c) != CXCursor_FunctionDecl)
+            if (clang_getCursorKind(cursor) != CXCursor_FunctionDecl)
                 return CXChildVisit_Continue;
 
-            CXSourceLocation loc = clang_getCursorLocation(c);
-            CXFile file; unsigned line, col, off;
-            clang_getFileLocation(loc, &file, &line, &col, &off);
-            if (!file) return CXChildVisit_Continue;
+            if (!isFromHeader(cursor, ctx->wantedBase))
+                return CXChildVisit_Continue;
 
-            CXString fname = clang_getFileName(file);
-            std::string base = std::filesystem::path(clang_getCString(fname)).filename().string();
-            clang_disposeString(fname);
-            if (base != ctx->wantedBase) return CXChildVisit_Continue;
-
-            CXString nm = clang_getCursorSpelling(c);
-            std::string funcName = clang_getCString(nm);
-            clang_disposeString(nm);
-
-            //  Маппим возвращаемый тип
-            auto retType = mapCType(clang_getCursorResultType(c));
-            if (!retType) { ctx->skipped++; return CXChildVisit_Continue; }
-
-            //  Маппим параметры
-            int nargs = clang_Cursor_getNumArguments(c);
-            auto info = std::make_shared<FuncInfo>();
-            info->returnType = retType;
-            info->isExternC = true;
-            info->isVariadic = clang_Cursor_isVariadic(c);
-
-            bool ok = true;
-            for (int i = 0; i < nargs; ++i) {
-                CXCursor a = clang_Cursor_getArgument(c, i);
-                auto pType = mapCType(clang_getCursorType(a));
-                if (!pType) { ok = false; break; }
-                CXString pn = clang_getCursorSpelling(a);
-                info->params.push_back({clang_getCString(pn), pType});
-                clang_disposeString(pn);
+            auto sym = makeCFuncSymbol(cursor);
+            if (!sym) {
+                ctx->skipped++;
+                return CXChildVisit_Continue;
             }
-            if (!ok) { ctx->skipped++; return CXChildVisit_Continue; }
 
-            auto sym = std::make_shared<Symbol>();
-            sym->name = funcName;
-            sym->kind = SymbolKind::Function;
-            sym->type = retType;
-            sym->funcInfo = info;
-            sym->isInitialized = true;
-
-            if (ctx->table->declare(sym)) ctx->registered++;
-            else ctx->skipped++;  //  имя уже занято (повторный импорт и т.п.)
+            if (ctx->table->declare(sym))
+                ctx->registered++;
+            else
+                ctx->skipped++;
 
             return CXChildVisit_Continue;
         }, &ctx);
 
-    std::cerr << "[c-import] " << imp->path
-              << ": registered " << ctx.registered
-              << ", skipped " << ctx.skipped << "\n";
-
-    clang_disposeTranslationUnit(tu);
+    clang_disposeTranslationUnit(res);
     clang_disposeIndex(index);
 }
 
 void SemanticAnalyzer::processImport(ImportDecl* imp) {
-    if (imp->isC) {
+    if (imp->isC) {     //  Если Сишная функция
         processCImport(imp);
         return;
     }
 
-    //  Разрешаем путь относительно текущего файла
     std::filesystem::path base = std::filesystem::path(currentFilePath).parent_path();
-    std::filesystem::path target = base / imp->path;
+    std::filesystem::path target = base / imp->path;    //  Разрешаем путь относительно текущего файла
 
     if (!std::filesystem::exists(target)) {
         error(imp->line, "cannot open imported file '" + imp->path + "'");
@@ -1420,12 +1529,10 @@ void SemanticAnalyzer::processImport(ImportDecl* imp) {
 
     std::string absPath = std::filesystem::canonical(target).string();
 
-    //  Защита от циклических импортов
-    if (importedFiles.contains(absPath)) return;
+    if (importedFiles.contains(absPath)) return;    //  Защита от циклических импортов
     importedFiles.insert(absPath);
 
-    //  Читаем файл
-    std::ifstream file(absPath);
+    std::ifstream file(absPath);    //  Читаем файл
     if (!file.is_open()) {
         error(imp->line, "cannot open imported file '" + imp->path + "'");
         return;
@@ -1434,69 +1541,58 @@ void SemanticAnalyzer::processImport(ImportDecl* imp) {
     buf << file.rdbuf();
     std::string source = buf.str();
 
-    //  Токенизируем
-    auto tokens = tokenize(source);
+    auto tokens = tokenize(source);     //  Токенизируем
     if (!tokens) {
         error(imp->line, "in '" + imp->path + "': " + tokens.error());
         return;
     }
 
-    //  Парсим
-    auto nodes = parse(*tokens);
+    auto nodes = parse(*tokens);    //  Парсим
     if (!nodes) {
         error(imp->line, "in '" + imp->path + "': " + nodes.error());
         return;
     }
 
-    //  Сохраняем контекст и переключаемся на импортируемый файл
-    std::string prevFile = currentFilePath;
+    std::string prevFile = currentFilePath; //  Сохраняем контекст и переключаемся на импортируемый файл
     currentFilePath = absPath;
 
-    //  Собираем top-level объявления импортируемого файла
-    collectTopLevel(*nodes);
+    collectTopLevel(*nodes);    //  Собираем top-level объявления импортируемого файла
 
-    //  Полный анализ тел (чтобы ошибки внутри модуля тоже обнаруживались)
-    for (auto* decl : *nodes)
+    for (auto* decl : *nodes) { //  Полный анализ тел (чтобы ошибки внутри модуля тоже обнаруживались)
         analyzeStmt(decl);
+    }
 
     currentFilePath = prevFile;
 
     //  Удаляем из таблицы символов всё, что не помечено export
-    //  (оставляем только exported символы доступными вызывающему модулю)
+    //  оставляем только exported символы доступными вызывающему модулю
     auto scope = table.currentScope();
     std::vector<std::string> toRemove;
     for (auto& [name, sym] : scope->symbols) {
         if (!sym->isExported && sym->kind != SymbolKind::Function) {
-            //  Встроенные функции (print, len...) не удаляем
-            toRemove.push_back(name);
+            toRemove.push_back(name);   //  Собираем всё что хотим удалить
         }
-        //  Пользовательские функции без export тоже удаляем
+        
         if (sym->kind == SymbolKind::Function && !sym->isExported) {
-            //  Проверяем что это не builtin (builtins не имеют line)
-            bool isBuiltin = (name == "print" || name == "len" || name == "input"
-                           || name == "exit" || name == "panic" || name == "push" || name == "pop");
-            if (!isBuiltin)
+            bool isBuiltin = (name == "print" || name == "len" || name == "input" || name == "exit" || name == "panic" || name == "push" || name == "pop");
+            if (!isBuiltin)     //  Встройки не удаляем
                 toRemove.push_back(name);
         }
     }
     for (auto& name : toRemove)
-        scope->symbols.erase(name);
+        scope->symbols.erase(name);     //  Удаляем
 }
 
 std::expected<void, std::string> SemanticAnalyzer::analyze(Program* program, const std::string& filePath) {    //  Точка входа анализатора
     errors.clear(); //  Очищаем массив ошибок
-    currentFilePath = std::filesystem::canonical(filePath).string();    
-    // Canonical гарантия что не будет повторных импортов одного и того же файла по разным путям
-    importedFiles.insert(currentFilePath);
-    // Множество всех импортируемых файлов
+    currentFilePath = std::filesystem::canonical(filePath).string();  // Canonical гарантия что не будет повторных импортов одного и того же файла по разным путям
+    importedFiles.insert(currentFilePath);  // Множество всех импортируемых файлов
+    registerBuiltins();     //  Регистрируем встроенные функции (print, len, input, exit, panic, push, pop)
 
-    //  Регистрируем встроенные функции (print, len, input, exit, panic, push, pop)
-    registerBuiltins();
-
-    //  Обрабатываем импорты — загружаем exported символы из других файлов
-    for (auto* decl : program->decls) {
-        if (auto* imp = dynamic_cast<ImportDecl*>(decl))
+    for (auto* decl : program->decls) { //  Обрабатываем импорты — загружаем exported символы из других файлов
+        if (auto* imp = dynamic_cast<ImportDecl*>(decl)) {
             processImport(imp);
+        }
     }
 
     //  Первый проход — собираем все top-level имена (функции, структуры, алиасы)
@@ -1505,17 +1601,16 @@ std::expected<void, std::string> SemanticAnalyzer::analyze(Program* program, con
 
     //  Второй проход — полный анализ тел функций и выражений
     for (auto* decl : program->decls) {
-        if (dynamic_cast<ImportDecl*>(decl)) continue;  //  Импорты уже обработаны
+        if (dynamic_cast<ImportDecl*>(decl)) continue;  //  Импорты уже обработаны -> скипаем
         analyzeStmt(decl);
     }
 
-    //  Проверяем наличие точки входа: int main()
-    auto mainSym = table.resolve("main");
+    auto mainSym = table.resolve("main");   //  Проверяем наличие точки входа: int main()
     if (!mainSym || mainSym->kind != SymbolKind::Function) {
         errors.push_back("missing entry point: expected function 'int main()'");
     } 
     
-    else if (!mainSym->funcInfo) {
+    else if (!mainSym->funcInfo) {  //  кто-то решил что main теперь не функция
         errors.push_back("'main' is not a function");
     } 
     
@@ -1526,11 +1621,11 @@ std::expected<void, std::string> SemanticAnalyzer::analyze(Program* program, con
             errors.push_back("'main' must take no parameters");
     }
 
-    if (!errors.empty()) {
-        std::string msg;
-        for (auto& e : errors)
-            msg += e + "\n";
-        return std::unexpected(msg);
+    if (!errors.empty()) {      //  Передаём все найденные ошибки
+        std::string message;
+        for (auto& i : errors)
+            message += i + "\n";
+        return std::unexpected(message);
     }
     return {};
 }

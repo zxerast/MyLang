@@ -1,14 +1,17 @@
-;  MyLang runtime — базовые функции ввода/вывода, линкуется с пользовательским .o
+;  MyLang runtime — ввод/вывод: print_int, print_string, print_bool, print_space, print_newline, lang_input
 
 section .rodata
-s_true:  db "true", 10
-s_false: db "false", 10
-nl:      db 10
+s_true:     db "true"
+s_false:    db "false"
+nl:         db 10
+space_byte: db ' '
 
 section .text
 
+extern lang_alloc
+
 ;  ──────────────────────────────────────────────────────────────
-;  print_int (rdi = signed int64) — печатает число и \n в stdout
+;  print_int (rdi = signed int64) — печатает число в stdout (без \n)
 ;  ──────────────────────────────────────────────────────────────
 global print_int
 print_int:
@@ -16,8 +19,7 @@ print_int:
     mov rbp, rsp
     sub rsp, 32                     ;  буфер под 32 цифры/знак
     mov rax, rdi
-    lea rcx, [rsp+31]
-    mov byte [rcx], 10              ;  newline в конце
+    lea rcx, [rsp+32]               ;  один байт за концом буфера
     mov rbx, 10
     xor r8, r8                      ;  флаг «отрицательное»
     test rax, rax
@@ -52,7 +54,7 @@ print_int:
     ret
 
 ;  ──────────────────────────────────────────────────────────────
-;  print_string (rdi = char*) — печатает нул-терминированную строку и \n
+;  print_string (rdi = char*) — печатает нул-терминированную строку (без \n)
 ;  ──────────────────────────────────────────────────────────────
 global print_string
 print_string:
@@ -67,15 +69,10 @@ print_string:
     mov rax, 1
     mov rdi, 1
     syscall
-    mov rax, 1
-    mov rdi, 1
-    mov rsi, nl
-    mov rdx, 1
-    syscall
     ret
 
 ;  ──────────────────────────────────────────────────────────────
-;  print_bool (rdi = 0/1)
+;  print_bool (rdi = 0/1) — "true" / "false" (без \n)
 ;  ──────────────────────────────────────────────────────────────
 global print_bool
 print_bool:
@@ -84,91 +81,84 @@ print_bool:
     mov rax, 1
     mov rdi, 1
     mov rsi, s_true
-    mov rdx, 5
+    mov rdx, 4
     syscall
     ret
 .pb_false:
     mov rax, 1
     mov rdi, 1
     mov rsi, s_false
-    mov rdx, 6
+    mov rdx, 5
     syscall
     ret
 
 ;  ──────────────────────────────────────────────────────────────
-;  strlen (rdi = char*) → rax = длина без нуля
+;  print_space — один пробел в stdout
 ;  ──────────────────────────────────────────────────────────────
-global lang_strlen
-lang_strlen:
-    xor rax, rax
-.sl_loop:
-    cmp byte [rdi+rax], 0
-    je .sl_done
-    inc rax
-    jmp .sl_loop
-.sl_done:
-    ret
-
-;  ──────────────────────────────────────────────────────────────
-;  panic (rdi = char*) — печатает сообщение и выходит с кодом 1
-;  ──────────────────────────────────────────────────────────────
-global lang_panic
-lang_panic:
-    call print_string
+global print_space
+print_space:
+    mov rax, 1
     mov rdi, 1
-    mov rax, 60
+    mov rsi, space_byte
+    mov rdx, 1
     syscall
+    ret
 
 ;  ──────────────────────────────────────────────────────────────
-;  lang_alloc (rdi = size) → rax = указатель. Просто обёртка над brk.
+;  print_newline — перевод строки в stdout
 ;  ──────────────────────────────────────────────────────────────
-section .bss
-heap_ptr: resq 1                    ;  текущая вершина кучи
-heap_end: resq 1                    ;  граница (увеличиваем через brk)
+global print_newline
+print_newline:
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, nl
+    mov rdx, 1
+    syscall
+    ret
 
-section .text
-global lang_alloc
-lang_alloc:
+;  ──────────────────────────────────────────────────────────────
+;  input () → rax = char* — читает строку из stdin (до 4095 байт),
+;  срезает завершающий \n, null-терминирует. Буфер выделяется
+;  через lang_alloc и остаётся во владении вызывающего.
+;  ──────────────────────────────────────────────────────────────
+global lang_input
+lang_input:
     push rbp
     mov rbp, rsp
     push rbx
-    mov rbx, rdi                    ;  запрошенный размер
+    sub rsp, 8                      ;  выравнивание стека до 16 байт перед call
 
-    ;  Если heap_ptr == 0 — инициализируем через brk(0)
-    mov rax, [rel heap_ptr]
+    mov rdi, 4096
+    call lang_alloc
+    mov rbx, rax                    ;  сохраним указатель на буфер
+
+    ;  sys_read(fd=0, buf=rbx, count=4095) → rax = число прочитанных байт
+    xor rdi, rdi                    ;  fd = 0 (stdin)
+    mov rsi, rbx
+    mov rdx, 4095                   ;  оставляем 1 байт под \0
+    xor rax, rax                    ;  sys_read
+    syscall
+
+    ;  Если ошибка или EOF — возвращаем пустую строку
     test rax, rax
-    jnz .la_check
-    mov rax, 12                     ;  sys_brk
-    xor rdi, rdi
-    syscall
-    mov [rel heap_ptr], rax
-    mov [rel heap_end], rax
+    jle .inp_empty
 
-.la_check:
-    mov rax, [rel heap_ptr]
-    add rax, rbx                    ;  новая вершина после аллокации
-    cmp rax, [rel heap_end]
-    jbe .la_bump
+    ;  Если последний байт \n — затираем его, иначе ставим \0 после хвоста
+    lea rcx, [rbx+rax-1]
+    cmp byte [rcx], 10
+    jne .inp_term
+    mov byte [rcx], 0
+    jmp .inp_done
+.inp_term:
+    mov byte [rbx+rax], 0
+    jmp .inp_done
+.inp_empty:
+    mov byte [rbx], 0
 
-    ;  Нужно расширить кучу: brk(new_end), округлив до 64 KiB
-    mov rdi, rax
-    add rdi, 0xFFFF
-    and rdi, -0x10000
-    mov rax, 12
-    syscall
-    mov [rel heap_end], rax
-
-.la_bump:
-    mov rax, [rel heap_ptr]
-    add [rel heap_ptr], rbx         ;  двигаем указатель
+.inp_done:
+    mov rax, rbx                    ;  результат — указатель на буфер
+    add rsp, 8
     pop rbx
     mov rsp, rbp
     pop rbp
-    ret
-
-;  ──────────────────────────────────────────────────────────────
-;  lang_free — заглушка (bump-allocator без освобождения)
-;  ──────────────────────────────────────────────────────────────
-global lang_free
-lang_free:
     ret

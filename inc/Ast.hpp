@@ -57,6 +57,8 @@ struct Unary : Expr{
 struct FuncCall : Expr{
     Expr *callee;
     std::vector<Expr*> args;
+    bool isExternC = false;   //  Вызов C-функции (без префикса lang_)
+    bool isVariadic = false;  //  C-вариадная (нужен xor eax, eax)
 };
 
 struct FieldAccess : Expr{

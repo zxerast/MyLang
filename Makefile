@@ -4,16 +4,18 @@ LDFLAGS = -L/usr/lib/llvm-18/lib -lclang -lreadline -lncurses
 SRC = $(wildcard src/*.cpp)
 OBJ = $(SRC:src/%.cpp=obj/%.o)
 DEP = $(OBJ:%.o=%.d)
+RUNTIME_ASM = $(wildcard runtime/*.asm)
+RUNTIME_OBJ = $(RUNTIME_ASM:%.asm=%.o)
 NAME = lang
 
 .PHONY: all clean fclean re
 
-all: $(NAME) runtime/runtime.o
+all: $(NAME) $(RUNTIME_OBJ)
 
 $(NAME): $(OBJ)
 	$(CXX) $(OBJ) -o $(NAME) $(LDFLAGS)
 
-runtime/runtime.o: runtime/runtime.asm
+runtime/%.o: runtime/%.asm
 	nasm -f elf64 $< -o $@
 
 obj/%.o: src/%.cpp
@@ -24,7 +26,7 @@ clean:
 	rm -rf obj
 
 fclean: clean
-	rm -f $(NAME) runtime/runtime.o
+	rm -f $(NAME) $(RUNTIME_OBJ)
 
 re: fclean all
 

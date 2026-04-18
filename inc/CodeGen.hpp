@@ -6,70 +6,62 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
-//  Информация об одной локальной переменной в текущей функции
 struct LocalVar {
     int offset;                     //  Отрицательное смещение от rbp
-    std::shared_ptr<Type> type;
+    std::shared_ptr<Type> type;     //  Тип локальной переменной
 };
 
-//  Пара меток для break/continue внутри цикла
 struct LoopLabels {
-    std::string breakLabel;
-    std::string continueLabel;
+    std::string breakLabel;     //  break
+    std::string continueLabel;  //  continue
 };
 
-class CodeGen {
-    //  Буферы секций — собираем в них инструкции, склеиваем в finalize()
-    std::ostringstream data;        //  .data    — инициализированные глобальные
-    std::ostringstream rodata;      //  .rodata  — строковые/float литералы
-    std::ostringstream bss;         //  .bss     — неинициализированные глобальные
-    std::ostringstream text;        //  .text    — код
+class CodeGen {     //  Буферы секций — собираем в них инструкции, склеиваем в finalize()
+    std::ostringstream data;        //  инициализированные глобальные переменные
+    std::ostringstream rodata;      //  строковые и неизменяемые литералы
+    std::ostringstream bss;         //  неинициализированные глобальные переменные
+    std::ostringstream text;        //  код
 
     int labelCounter = 0;           //  Счётчик для уникальных меток .L0, .L1, ...
     int stringCounter = 0;          //  Счётчик строковых литералов .str0, .str1, ...
     int arrayCounter  = 0;          //  Счётчик литералов массивов
     int structCounter = 0;          //  Счётчик временных слотов для структур/классов
 
-    //  Текущая функция
-    std::unordered_map<std::string, LocalVar> locals;
+    std::unordered_map<std::string, LocalVar> locals;   //  Локальные переменные функции (имя -> тип+смещение)
     int currentFrameSize = 0;       //  Сколько байт выделено в текущем фрейме
-    std::string currentEpilogLabel; //  Метка эпилога для return
-    std::vector<LoopLabels> loopStack;
+    std::string currentEndLabel; //  Метка конца функции для return
+    std::vector<LoopLabels> loopStack;  //  Метки break и continue
 
-    //  Пул строковых литералов: текст → метка
-    std::unordered_map<std::string, std::string> stringPool;
+    std::unordered_map<std::string, std::string> stringPool;    //  Пул строковых литералов: текст → метка
 
-    //  Layout структур/классов: {struct_name → {field_name → offset}}. Поле = qword.
-    std::unordered_map<std::string, std::unordered_map<std::string, int>> structLayouts;
-    //  Суммарный размер типа структуры/класса в байтах
-    std::unordered_map<std::string, int> structSizes;
+    std::unordered_set<std::string> externCFunctions;   //  Имена C-функций, которые нужно объявить как extern
 
-    //  ─── Helper'ы ───
-    void emit(const std::string& line);         //  Пишет строку в .text с отступом
-    void emitLabel(const std::string& label);   //  Пишет метку без отступа
+    std::unordered_map<std::string, std::unordered_map<std::string, int>> structLayouts;    //  Смещение структур/классов: {struct_name -> {field_name -> offset}}. Поле = qword.
+    std::unordered_map<std::string, int> structSizes;   //  Суммарный размер типа структуры/класса в байтах
+
+    bool hasMain = false;           //  Выставляется compileDecl, когда встречаем функцию main
+
     std::string newLabel(const std::string& hint = "L");    //  Генерирует уникальную метку
-    std::string internString(const std::string& s);         //  Добавляет строку в пул, возвращает метку
+    std::string internString(const std::string& str);       //  Добавляет строку в пул, возвращает метку
 
-    //  Размер типа в байтах (с учётом выравнивания)
-    static int sizeOfType(const std::shared_ptr<Type>& t);
+    static int sizeOfType(const std::shared_ptr<Type>& type);   //  Размер типа в байтах с учётом выравнивания
 
-    //  Выделение локальной переменной в текущем фрейме
-    int allocLocal(const std::string& name, const std::shared_ptr<Type>& type);
+    int allocLocal(const std::string& name, const std::shared_ptr<Type>& type); //  Выделение локальной переменной в текущем фрейме
     const LocalVar* findLocal(const std::string& name) const;
 
-    //  Компиляция функции: пролог, параметры, тело, эпилог
-    void compileFunction(FuncDecl* fn);
-    //  Первый проход: суммарный размер локалок в теле (8-байтное выравнивание)
-    int countLocalsSize(Stmt* s);
-    //  Компиляция одного стейтмента
-    void compileStmt(Stmt* s);
-    //  Компиляция выражения — результат в rax (для int/ptr)
-    void compileExpr(Expr* e);
+    void collectLayout(const std::string& name, const std::vector<StructField>& fields); //  Запоминает layout полей struct/class (поле = qword)
+    void collectDecls(Stmt* decl);                                                       //  Обходит AST и регистрирует layout'ы struct/class
+    void compileDecl(Stmt* decl, const std::string& classPrefix);                        //  Компилирует функции/методы; classPrefix добавляется к имени символа
 
-    //  Финальная сборка: склеивает секции, пишет .asm, вызывает nasm + ld
-    std::expected<void, std::string> finalize(const std::string& outPath);
+    void compileFunction(FuncDecl* func);   //  Компиляция функции: пролог, параметры, тело, эпилог
+    int countLocalsSize(Stmt* size);    //  Первый проход: суммарный размер локалок в теле (8-байтное выравнивание)
+    void compileStmt(Stmt* stmt);   //  Компиляция одного стейтмента
+    void compileExpr(Expr* expr);   //  Компиляция выражения — результат в rax (для int/ptr)
+
+    std::expected<void, std::string> finalize(const std::string& outPath);  //  Финальная сборка: склеивает секции, пишет .asm, вызывает nasm + ld
 
 public:
     //  Точка входа — принимает AST и путь выходного исполняемого файла

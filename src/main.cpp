@@ -18,9 +18,9 @@ int main(int argc, char* argv[]){
 
     buf << code_file.rdbuf();
 
-    std::string s = buf.str();
+    std::string source = buf.str();
 
-    auto tokens = tokenize(s);
+    auto tokens = tokenize(source);
     if (!tokens) {
         std::cerr << tokens.error() << "\n";
         return 1;

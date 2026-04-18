@@ -106,9 +106,9 @@ struct Parser {
             return parseBlock();
         }
 
-        auto e = parseEquasion();
+        auto expr = parseEquasion();
 
-        if (!e) return std::unexpected(e.error());
+        if (!expr) return std::unexpected(expr.error());
 
         // присваивание: lvalue = expr ;
         if (i < source.size() && source[i].type == TokenType::Equal){
@@ -123,8 +123,8 @@ struct Parser {
             i++;
 
             auto *node = new Assign;
-            node->line = (*e)->line;
-            node->target = *e;
+            node->line = (*expr)->line;
+            node->target = *expr;
             node->value = *rhs;
             return node;
         }
@@ -136,8 +136,8 @@ struct Parser {
         i++;
 
         auto *node = new ExprStmt;
-        node->line = (*e)->line;
-        node->expr = *e;
+        node->line = (*expr)->line;
+        node->expr = *expr;
         return node;
     }
 
