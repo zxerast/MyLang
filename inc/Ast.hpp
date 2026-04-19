@@ -154,6 +154,7 @@ struct FuncDecl : Stmt{
 struct StructField{
     std::string typeName;
     std::string name;
+    Expr* defaultValue = nullptr;  //  Значение по умолчанию (может быть nullptr)
 };
 
 struct StructDecl : Stmt{

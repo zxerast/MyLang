@@ -398,13 +398,24 @@ struct Parser {
             }
             std::string fieldName = source[i++].lexeme;
 
+            Expr* defaultValue = nullptr;
+            if (i < source.size() && source[i].type == TokenType::Equal) {
+                i++; // съели '='
+                auto initExpr = parseEquasion();
+                if (!initExpr) {
+                    delete node;
+                    return std::unexpected(initExpr.error());
+                }
+                defaultValue = *initExpr;
+            }
+
             if (i >= source.size() || source[i].type != TokenType::Separator){
                 delete node;
                 return std::unexpected("Ошибка парсера: ожидался ';' после поля структуры");
             }
             i++; // съели ';'
 
-            node->fields.push_back({typeName, fieldName});
+            node->fields.push_back({typeName, fieldName, defaultValue});
         }
 
         if (i >= source.size()){
@@ -434,6 +445,12 @@ struct Parser {
         i++; // съели '{'
 
         while (i < source.size() && source[i].type != TokenType::RightBrace) {
+            //  Пропускаем лишние ';' между членами класса
+            if (source[i].type == TokenType::Separator) {
+                i++;
+                continue;
+            }
+
             //  Деструктор: ~ClassName()
             if (i + 1 < source.size() && source[i].type == TokenType::Tilde
                 && source[i + 1].type == TokenType::Iden && source[i + 1].lexeme == node->name) {
@@ -543,13 +560,24 @@ struct Parser {
             }
             std::string fieldName = source[i++].lexeme;
 
+            Expr* defaultValue = nullptr;
+            if (i < source.size() && source[i].type == TokenType::Equal) {
+                i++; // съели '='
+                auto initExpr = parseEquasion();
+                if (!initExpr) {
+                    delete node;
+                    return std::unexpected(initExpr.error());
+                }
+                defaultValue = *initExpr;
+            }
+
             if (i >= source.size() || source[i].type != TokenType::Separator) {
                 delete node;
                 return std::unexpected("Ошибка парсера: ожидался ';' после поля класса");
             }
             i++; // съели ';'
 
-            node->fields.push_back({*fieldType, fieldName});
+            node->fields.push_back({*fieldType, fieldName, defaultValue});
         }
 
         if (i >= source.size()) {
@@ -880,7 +908,9 @@ struct Parser {
 
         while (i < source.size() && (source[i].type == TokenType::EqualEqual || source[i].type == TokenType::NotEqual)){
 
-            Operand op = (source[i].type == TokenType::EqualEqual) ? Operand::EqualEqual : Operand::NotEqual;
+            Operand op;
+            if (source[i].type == TokenType::EqualEqual) op = Operand::EqualEqual;
+            else                                         op = Operand::NotEqual;
             i++;
 
             auto right = parseComparison();
@@ -951,7 +981,9 @@ struct Parser {
         Expr* result = *left;
 
         while (i < source.size() && (source[i].type == TokenType::Plus || source[i].type == TokenType::Minus)) {
-            Operand op = (source[i].type == TokenType::Plus) ? Operand::Add : Operand::Sub;
+            Operand op;
+            if (source[i].type == TokenType::Plus) op = Operand::Add;
+            else                                   op = Operand::Sub;
             i++;
             auto right = parseMulDiv();
             

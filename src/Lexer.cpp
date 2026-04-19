@@ -241,6 +241,21 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
                 std::string str;
                 i++;
                 while (i < source.size() && source[i] != '"' && source[i] != '\n'){
+                    if (source[i] == '\\' && i + 1 < source.size()) {    //  Escape-последовательности
+                        char esc = source[i + 1];
+                        if      (esc == 'n')  str.push_back('\n');
+                        else if (esc == 't')  str.push_back('\t');
+                        else if (esc == 'r')  str.push_back('\r');
+                        else if (esc == '0')  str.push_back('\0');
+                        else if (esc == '\\') str.push_back('\\');
+                        else if (esc == '"')  str.push_back('"');
+                        else if (esc == '\'') str.push_back('\'');
+                        else {
+                            return std::unexpected("Ошибка лексера: неизвестная escape-последовательность \\" + std::string(1, esc));
+                        }
+                        i += 2;
+                        continue;
+                    }
                     str.push_back(source[i++]);
                 }
                 if (i >= source.size() || source[i] != '"'){

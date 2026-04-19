@@ -17,6 +17,7 @@ global print_int
 print_int:
     push rbp
     mov rbp, rsp
+    push rbx                        ;  rbx — callee-saved по SysV ABI
     sub rsp, 32                     ;  буфер под 32 цифры/знак
     mov rax, rdi
     lea rcx, [rsp+32]               ;  один байт за концом буфера
@@ -49,7 +50,8 @@ print_int:
     mov rdi, 1
     mov rax, 1                      ;  sys_write
     syscall
-    mov rsp, rbp
+    add rsp, 32
+    pop rbx
     pop rbp
     ret
 
@@ -90,6 +92,93 @@ print_bool:
     mov rsi, s_false
     mov rdx, 5
     syscall
+    ret
+
+;  ──────────────────────────────────────────────────────────────
+;  print_char (rdi = ASCII-код) — печатает один байт (для типа char)
+;  ──────────────────────────────────────────────────────────────
+global print_char
+print_char:
+    push rbp
+    mov rbp, rsp
+    sub rsp, 16                     ;  выравнивание + 1 байт под символ
+    mov [rsp], dil
+    mov rax, 1                      ;  sys_write
+    mov rdi, 1
+    mov rsi, rsp
+    mov rdx, 1
+    syscall
+    mov rsp, rbp
+    pop rbp
+    ret
+
+;  ──────────────────────────────────────────────────────────────
+;  print_float (xmm0 = double) — печатает float формата "[-]int.frac", 6 цифр после точки
+;  ──────────────────────────────────────────────────────────────
+extern print_int
+global print_float
+print_float:
+    push rbp
+    mov rbp, rsp
+    push rbx
+    sub rsp, 24                        ;  [rsp..rsp+0] — char, [rsp+8..rsp+15] — xmm0 save, [rsp+16..rsp+21] — frac buf
+
+    ;  Знак: печатаем '-', затем берём abs(xmm0)
+    movq rax, xmm0
+    test rax, rax
+    jns .pf_pos
+    mov byte [rsp], '-'
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, rsp
+    mov rdx, 1
+    syscall
+    movq rax, xmm0
+    mov rbx, 0x7FFFFFFFFFFFFFFF
+    and rax, rbx
+    movq xmm0, rax
+.pf_pos:
+    ;  Целая часть: сохраняем xmm0, печатаем int
+    movsd [rsp+8], xmm0
+    cvttsd2si rax, xmm0
+    mov rdi, rax
+    call print_int
+    movsd xmm0, [rsp+8]
+    ;  Точка
+    mov byte [rsp], '.'
+    mov rax, 1
+    mov rdi, 1
+    mov rsi, rsp
+    mov rdx, 1
+    syscall
+    ;  Дробная: xmm0 - trunc(xmm0), затем * 1000000
+    cvttsd2si rax, xmm0
+    cvtsi2sd xmm1, rax
+    subsd xmm0, xmm1
+    mov rax, 1000000
+    cvtsi2sd xmm1, rax
+    mulsd xmm0, xmm1
+    cvttsd2si rax, xmm0                ;  rax = 0..999999
+    ;  Раскладываем 6 цифр с ведущими нулями (справа налево)
+    lea rdi, [rsp+22]                  ;  конец буфера (за последним байтом)
+    mov rcx, 6
+    mov rbx, 10
+.pf_frac_loop:
+    xor rdx, rdx
+    div rbx
+    add dl, '0'
+    dec rdi
+    mov [rdi], dl
+    loop .pf_frac_loop
+    mov rsi, rdi
+    mov rdx, 6
+    mov rax, 1
+    mov rdi, 1
+    syscall
+
+    add rsp, 24
+    pop rbx
+    pop rbp
     ret
 
 ;  ──────────────────────────────────────────────────────────────

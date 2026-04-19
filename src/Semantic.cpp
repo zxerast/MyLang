@@ -27,7 +27,7 @@ static bool typesEqual(const std::shared_ptr<Type>& a, const std::shared_ptr<Typ
     if (!a || !b) {     //  Кого-то из типов несуществует
         return false;
     }     
-    if (a->kind != b->kind) {   //  Если типы объекты разные по сущности
+    if (a->kind != b->kind) {   //  Если типы объекты разные по сущности (kind из Type.hpp)
         return false;
     }
     if (a->kind == TypeKind::Array) {   //  Массивы рекурсивно проверяем по типам первых элементов
@@ -43,7 +43,7 @@ static bool typesEqual(const std::shared_ptr<Type>& a, const std::shared_ptr<Typ
 }
 
 static std::string typeToString(const std::shared_ptr<Type>& type) {   //  Переводим тип в строку
-    if (!type) "<unknown>";                                            //  Это для записи в ошибки  
+    if (!type) return "<unknown>";                                     //  Это для записи в ошибки
     switch (type->kind) {
         case TypeKind::Int8:    return "int8";
         case TypeKind::Int16:   return "int16";
@@ -388,9 +388,14 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
         return expr->resolvedType;
     }
 
-    //  Строковый литерал -> string
-    if (dynamic_cast<String*>(expr)) {
-        expr->resolvedType = makeType(TypeKind::String);
+    //  Строковый литерал -> string, либо char (если ожидается Char и длина = 1)
+    if (auto* s = dynamic_cast<String*>(expr)) {
+        if (expected && expected->kind == TypeKind::Char && s->value.size() == 1) {
+            expr->resolvedType = makeType(TypeKind::Char);
+        }
+        else {
+            expr->resolvedType = makeType(TypeKind::String);
+        }
         return expr->resolvedType;
     }
 
@@ -425,6 +430,12 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             case Operand::Add:
                 if (leftType->kind == TypeKind::String && rightType->kind == TypeKind::String) {
                     expr->resolvedType = makeType(TypeKind::String);  //  "Hello" + "World" -> string
+                    return expr->resolvedType;
+                }
+                //  string + char  /  char + string -> string (символ склеивается как 1-байтовая строка)
+                if ((leftType->kind == TypeKind::String && rightType->kind == TypeKind::Char)
+                 || (leftType->kind == TypeKind::Char && rightType->kind == TypeKind::String)) {
+                    expr->resolvedType = makeType(TypeKind::String);
                     return expr->resolvedType;
                 }
                 [[fallthrough]];  //  иначе — обычная арифметика
@@ -615,7 +626,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             for (size_t i = 0; i < argTypes.size(); i++) {
                 if (!argTypes[i]) continue;
                 auto kind = argTypes[i]->kind;
-                bool isSupported = (kind == TypeKind::Bool || kind == TypeKind::String || kind == TypeKind::Char || kind == TypeKind::Int8  || kind == TypeKind::Int16 || kind == TypeKind::Int32 || kind == TypeKind::Int64 || kind == TypeKind::Uint8 || kind == TypeKind::Uint16 || kind == TypeKind::Uint32 || kind == TypeKind::Uint64);
+                bool isSupported = (kind == TypeKind::Bool || kind == TypeKind::String || kind == TypeKind::Char || kind == TypeKind::Int8  || kind == TypeKind::Int16 || kind == TypeKind::Int32 || kind == TypeKind::Int64 || kind == TypeKind::Uint8 || kind == TypeKind::Uint16 || kind == TypeKind::Uint32 || kind == TypeKind::Uint64 || kind == TypeKind::Float32 || kind == TypeKind::Float64 || kind == TypeKind::Array || kind == TypeKind::DynArray);
                 if (!isSupported)
                     error(expr->line, "'print' argument " + std::to_string(i + 1) + " has unsupported type '" + typeToString(argTypes[i]) + "'");
             }
@@ -765,22 +776,33 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
         return expr->resolvedType;
     }
 
-    //  Литерал массива [1, 2, 3] 
+    //  Литерал массива [1, 2, 3]. Если контекст задаёт тип элемента (float[3] arr = [3.14, 5, 6.2]),
+    //  то он становится эталоном и каждый элемент неявно приводится к нему (5 → 5.0).
     if (auto* arrLit = dynamic_cast<ArrayLiteral*>(expr)) {
         if (arrLit->elements.empty()) {     //  Если массив пуст
             error(expr->line, "cannot infer type of empty array literal");
             return nullptr;
         }
 
-        auto firstType = analyzeExpr(arrLit->elements[0]);  //  Берём тип первого элемента как эталон
-        for (size_t j = 1; j < arrLit->elements.size(); j++) {
-            auto elemType = analyzeExpr(arrLit->elements[j]);
-            if (firstType && elemType && !typesEqual(firstType, elemType)) {
-                error(expr->line, "array element type mismatch: expected '" + typeToString(firstType) + "', got '" + typeToString(elemType) + "'");
-            }
+        std::shared_ptr<Type> target;
+        if (expected && (expected->kind == TypeKind::Array || expected->kind == TypeKind::DynArray)) {
+            target = expected->elementType;
+        }
+        //  Без контекста — эталон берём по первому элементу (без expected, иначе рекурсия)
+        if (!target) {
+            target = analyzeExpr(arrLit->elements[0]);
         }
 
-        expr->resolvedType = makeArrayType(firstType, static_cast<int>(arrLit->elements.size()));
+        for (size_t j = 0; j < arrLit->elements.size(); j++) {
+            auto elemType = analyzeExpr(arrLit->elements[j], target);
+            if (target && elemType && !isImplicitlyConvertible(elemType, target)) {
+                error(expr->line, "array element " + std::to_string(j + 1) + ": cannot convert '" + typeToString(elemType) + "' to '" + typeToString(target) + "'");
+            }
+            //  Прокидываем итоговый тип в элемент — кодоген увидит нужное представление (например, int 5 → float 5.0)
+            if (target) arrLit->elements[j]->resolvedType = target;
+        }
+
+        expr->resolvedType = makeArrayType(target, static_cast<int>(arrLit->elements.size()));
         return expr->resolvedType;
     }
 
@@ -962,6 +984,15 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
                 if (!fieldType)
                     error(decl->line, "unknown field type '" + field.typeName + "' in struct '" + structDecl->name + "'");
                 sym->structInfo->fields.push_back({field.name, fieldType});
+
+                //  Проверяем default-значение поля: тип должен быть совместим с объявленным типом поля
+                if (field.defaultValue) {
+                    auto defType = analyzeExpr(field.defaultValue, fieldType);
+                    if (defType && fieldType && !isImplicitlyConvertible(defType, fieldType)) {
+                        error(decl->line, "default value of field '" + field.name + "' in struct '" + structDecl->name
+                            + "': cannot convert '" + typeToString(defType) + "' to '" + typeToString(fieldType) + "'");
+                    }
+                }
             }
 
             auto type = makeType(TypeKind::Struct);    //  Тип самой структуры — Struct с именем
@@ -1123,6 +1154,32 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         analyzeBlock(block);
     }
     else if (auto* assign = dynamic_cast<Assign*>(stmt)) {  //  Присваивание, проверяем типы, const, инициализацию
+        //  Спец-форма: переопределение default-значения поля структуры `StructName.field = value`.
+        //  Обрабатываем отдельно, чтобы обычная ветка анализа Identifier не ругалась на тип вместо значения.
+        if (auto* fa = dynamic_cast<FieldAccess*>(assign->target)) {
+            if (auto* id = dynamic_cast<Identifier*>(fa->object)) {
+                auto sym = table.resolve(id->name);
+                if (sym && sym->kind == SymbolKind::Struct) {
+                    std::shared_ptr<Type> fieldType = nullptr;
+                    if (sym->structInfo) {
+                        for (auto& [fn, ft] : sym->structInfo->fields) {
+                            if (fn == fa->field) { fieldType = ft; break; }
+                        }
+                    }
+                    if (!fieldType) {
+                        error(stmt->line, "struct '" + id->name + "' has no field '" + fa->field + "'");
+                        return;
+                    }
+                    auto valType = analyzeExpr(assign->value, fieldType);
+                    if (valType && !isImplicitlyConvertible(valType, fieldType)) {
+                        error(stmt->line, "cannot redefine default of '" + id->name + "." + fa->field
+                            + "': expected '" + typeToString(fieldType) + "', got '" + typeToString(valType) + "'");
+                    }
+                    return;
+                }
+            }
+        }
+
         auto targetType = analyzeExpr(assign->target);
         auto valueType = analyzeExpr(assign->value, targetType);    //  Тип target — ожидаемый для контекстной типизации литералов в правой части
 
@@ -1257,11 +1314,21 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
 
             table.enterScope();  //  Заходим в тело
             auto selfSym = std::make_shared<Symbol>();  //  Внутри метода мы можем обращаться к экземплярам класса через self
-            selfSym->name = "self"; //  self неявно дописывается семантикой и является частным случаем обращения к полю 
+            selfSym->name = "self"; //  self неявно дописывается семантикой и является частным случаем обращения к полю
             selfSym->kind = SymbolKind::Variable;
             selfSym->type = selfieldType;   //  Ставим тип
             selfSym->isInitialized = true;
             table.declare(selfSym); //  Сохраняем
+
+            //  Поля класса видны в теле метода как обычные имена
+            for (auto& [fieldName, fieldType] : classSym->classInfo->fields) {
+                auto fieldSym = std::make_shared<Symbol>();
+                fieldSym->name = fieldName;
+                fieldSym->kind = SymbolKind::Variable;
+                fieldSym->type = fieldType;
+                fieldSym->isInitialized = true;
+                table.declare(fieldSym);
+            }
 
             //  Добавляем параметры
             if (currMethod != classSym->classInfo->methods.end()) {

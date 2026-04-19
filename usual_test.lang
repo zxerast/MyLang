@@ -1,0 +1,56 @@
+import <stdio.h>;
+
+struct Pair{
+    int num;
+    string name;
+}
+
+class MyClass {
+    Pair p = Pair{};
+    Pair[] arr;
+
+    void Add(int x, string y){
+        p.num = x;
+        p.name = y;
+        push(arr, p);
+        p = Pair{};
+    };
+
+    void Print(){
+        int i = 0;
+        while(i < len(arr)){
+            auto curr = arr[i];
+            print(curr.num, "->", curr.name);
+            i++;
+        };
+    };
+}
+
+int main(){
+    MyClass obj = new MyClass();
+
+    obj.Add(1, "Me");
+    obj.Add(2, "You");
+    obj.Add(3, "Him");
+
+    obj.Print();
+
+    MyClass.Print();
+
+    int[] s = [10, 20, 30];
+    int i = 0;
+    
+    while(i < len(s)){
+        print(s[i]);
+        i++;
+    }
+
+    print(s);
+
+    string a = "Hello";
+    string b = a + " World ";
+    char c = "!";
+    print(b + c);
+
+    return 0;
+}
