@@ -88,6 +88,7 @@ struct Token {
     SubType subType;
     std::string lexeme; // Токен в виде строки
     int line = 0;       // Номер строки для отслеживания ошибок
+    int column = 0;     // Номер столбца (1-based) начала токена
 
     Token(){
         this->type = TokenType::End;
@@ -111,5 +112,5 @@ struct Token {
 
 
 
-std::expected<std::vector<Token>, std::string> tokenize(const std::string& source);
+std::expected<std::vector<Token>, std::string> tokenize(const std::string& source, const std::string& filePath = "<source>");
 Token typeIdentifier(const std::string& elem);

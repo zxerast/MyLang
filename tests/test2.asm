@@ -1,3 +1,7 @@
+section .rodata
+__rt_div_zero: db "division by zero", 0
+__rt_bounds:   db "array index out of bounds", 0
+
 section .text
 extern print_int
 extern print_string
@@ -14,6 +18,7 @@ extern lang_alloc
 extern lang_free
 extern lang_push
 extern lang_pop
+extern lang_strcat
 
 global main
 main:
@@ -23,6 +28,8 @@ main:
     mov rdi, 16
     call lang_alloc
     push rax
+    mov qword [rax + 0], 0
+    mov qword [rax + 8], 0
     mov rax, 5
     mov rbx, [rsp]
     mov [rbx+0], rax
@@ -66,6 +73,12 @@ main:
     mov rax, 2
     mov rbx, rax
     pop rax
+    test rbx, rbx
+    jnz .modok4
+    lea rdi, [rel __rt_div_zero]
+    mov rsi, 16
+    call lang_panic
+.modok4:
     cqo
     idiv rbx
     mov rax, rdx
@@ -89,9 +102,9 @@ main:
     setg al
     movzx rax, al
     test rax, rax
-    jz .endif5
+    jz .endif6
     jmp .endwhile1
-.endif5:
+.endif6:
     mov rax, [rbp-16]
     mov rdi, rax
     call print_int

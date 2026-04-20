@@ -137,7 +137,11 @@ class SemanticAnalyzer {
     void processCImport(ImportDecl* imp);                           //  Парсинг C-заголовка через libclang
 
     void error(int line, const std::string& message) {
-        errors.push_back("line " + std::to_string(line) + ": " + message);  //  Все найденные ошибки записываем 
+        errors.push_back(currentFilePath + ":" + std::to_string(line) + ":0: error: " + message);
+    }
+
+    void error(int line, int column, const std::string& message) {
+        errors.push_back(currentFilePath + ":" + std::to_string(line) + ":" + std::to_string(column) + ": error: " + message);
     }
 
     std::shared_ptr<Type> analyzeExpr(Expr* expr, std::shared_ptr<Type> expected = nullptr);  // expected — ожидаемый тип из контекста для контекстной типизации литералов

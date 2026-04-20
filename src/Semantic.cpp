@@ -342,7 +342,14 @@ std::shared_ptr<Type> SemanticAnalyzer::resolveTypeName(const std::string& name)
             return type;
         } 
         else {  //  T[N] — фиксированный массив
-            return makeArrayType(elemType, std::stoi(inside));
+            int size = 0;
+            try {
+                size = std::stoi(inside);
+            } catch (const std::exception&) {
+                error(0, "invalid array size '" + inside + "' in type '" + name + "'");
+                return nullptr;
+            }
+            return makeArrayType(elemType, size);
         }
     }
 
@@ -409,11 +416,11 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
     if (auto* id = dynamic_cast<Identifier*>(expr)) {   //  Ищем имя в таблице символов, проверяем что переменная инициализирована
         auto sym = table.resolve(id->name);
         if (!sym) {
-            error(expr->line, "'" + id->name + "' is not declared");
+            error(expr->line, expr->column, "'" + id->name + "' is not declared");
             return nullptr; //  Нет такого идентификатора
         }
         if (!sym->isInitialized && sym->kind == SymbolKind::Variable) {
-            error(expr->line, "'" + id->name + "' is used before initialization");
+            error(expr->line, expr->column, "'" + id->name + "' is used before initialization");
         }   //  Переменная объявлена но не инициализирована 
         expr->resolvedType = sym->type;
         return expr->resolvedType;
@@ -421,8 +428,8 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
 
     //  Бинарная операция
     if (auto* bin = dynamic_cast<Binary*>(expr)) {  //  Рекурсивно анализируем оба операнда, потом проверяем совместимость типов
-        auto leftType = analyzeExpr(bin->left);
-        auto rightType = analyzeExpr(bin->right);
+        auto leftType = analyzeExpr(bin->left, expected);
+        auto rightType = analyzeExpr(bin->right, expected);
 
         if (!leftType || !rightType) return nullptr;    //  Если хотя бы один операнд не определён — не можем проверить
 
@@ -445,13 +452,13 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             case Operand::Div:
             case Operand::Mod:
                 if (!isNumericType(leftType) || !isNumericType(rightType)) {
-                    error(expr->line, "arithmetic operator requires numeric operands, got '" + typeToString(leftType) + "' and '" + typeToString(rightType) + "'");
+                    error(expr->line, expr->column, "arithmetic operator requires numeric operands, got '" + typeToString(leftType) + "' and '" + typeToString(rightType) + "'");
                     return nullptr;
                 }
                 {
                     auto common = commonType(leftType, rightType);  //  Неявное приведение: int32 + int64 -> int64, int + float -> float64
                     if (!common) {
-                        error(expr->line, "incompatible types in arithmetic: '" + typeToString(leftType) + "' and '" + typeToString(rightType) + "'");
+                        error(expr->line, expr->column, "incompatible types in arithmetic: '" + typeToString(leftType) + "' and '" + typeToString(rightType) + "'");
                         return nullptr;
                     }
                     expr->resolvedType = common;  
@@ -463,11 +470,11 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             case Operand::LessEqual:
             case Operand::GreaterEqual:
                 if (!isNumericType(leftType) || !isNumericType(rightType)) {
-                    error(expr->line, "comparison requires numeric operands, got '" + typeToString(leftType) + "' and '" + typeToString(rightType) + "'");
+                    error(expr->line, expr->column, "comparison requires numeric operands, got '" + typeToString(leftType) + "' and '" + typeToString(rightType) + "'");
                     return nullptr;
                 }
                 if (!commonType(leftType, rightType)) {
-                    error(expr->line, "incompatible types in comparison: '" + typeToString(leftType) + "' and '" + typeToString(rightType) + "'");
+                    error(expr->line, expr->column, "incompatible types in comparison: '" + typeToString(leftType) + "' and '" + typeToString(rightType) + "'");
                     return nullptr;
                 }
                 expr->resolvedType = makeType(TypeKind::Bool);  //  Возвращаемый тип вседа bool
@@ -475,8 +482,9 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
 
             case Operand::EqualEqual:   //  Равенства
             case Operand::NotEqual:
-                if (!typesEqual(leftType, rightType)) {
-                    error(expr->line, "cannot compare '" + typeToString(leftType) + "' with '" + typeToString(rightType) + "'");
+                if (!isImplicitlyConvertible(leftType, rightType)
+                 && !isImplicitlyConvertible(rightType, leftType)) {
+                    error(expr->line, expr->column, "cannot compare '" + typeToString(leftType) + "' with '" + typeToString(rightType) + "'");
                     return nullptr;
                 }
                 expr->resolvedType = makeType(TypeKind::Bool);
@@ -485,7 +493,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             case Operand::And:      //  И, ИЛИ
             case Operand::Or:
                 if (leftType->kind != TypeKind::Bool || rightType->kind != TypeKind::Bool) {
-                    error(expr->line, "logical operator requires bool operands, got '" + typeToString(leftType) + "' and '" + typeToString(rightType) + "'");
+                    error(expr->line, expr->column, "logical operator requires bool operands, got '" + typeToString(leftType) + "' and '" + typeToString(rightType) + "'");
                     return nullptr;
                 }
                 expr->resolvedType = makeType(TypeKind::Bool);
@@ -505,7 +513,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             case Operand::UnaryMinus:
             case Operand::UnaryPlus:
                 if (!isNumericType(operandType)) {  //  Обязано быть число для + и -
-                    error(expr->line, "unary +/- requires numeric operand, got '" + typeToString(operandType) + "'");
+                    error(expr->line, expr->column, "unary +/- requires numeric operand, got '" + typeToString(operandType) + "'");
                     return nullptr;
                 }
                 expr->resolvedType = operandType;
@@ -513,7 +521,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
 
             case Operand::Not:
                 if (operandType->kind != TypeKind::Bool) {  //  Для отрицания всегда bool
-                    error(expr->line, "'!' requires bool operand, got '" + typeToString(operandType) + "'");
+                    error(expr->line, expr->column, "'!' requires bool operand, got '" + typeToString(operandType) + "'");
                     return nullptr;
                 }
                 expr->resolvedType = makeType(TypeKind::Bool);
@@ -522,7 +530,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             case Operand::Increment:
             case Operand::Decrement:
                 if (!isIntType(operandType)) {  //  Только целые числа
-                    error(expr->line, "++/-- requires integer operand, got '" + typeToString(operandType) + "'");
+                    error(expr->line, expr->column, "++/-- requires integer operand, got '" + typeToString(operandType) + "'");
                     return nullptr;
                 }
                 expr->resolvedType = operandType;
@@ -545,7 +553,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
                     analyzeExpr(arg);   //  То сперва анализируем все параметры чтобы собрать все потенциальные ошибки
                 }
                 if (objType)    //  И только потом уже выходим со всем списком найденных проблем
-                    error(expr->line, "method call on non-class type '" + typeToString(objType) + "'");
+                    error(expr->line, expr->column, "method call on non-class type '" + typeToString(objType) + "'");
                 return nullptr;
             }
 
@@ -557,7 +565,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             const std::string& methodName = fieldCallee->field; 
             auto method = classSym->classInfo->methods.find(methodName);    //  Ищем метод в классе
             if (method == classSym->classInfo->methods.end()) {
-                error(expr->line, "class '" + objType->name + "' has no method '" + methodName + "'");
+                error(expr->line, expr->column, "class '" + objType->name + "' has no method '" + methodName + "'");
                 for (auto* arg : call->args) {
                     analyzeExpr(arg);   //  Также снова проходимся по параметрам для сбора ошибок
                 }
@@ -574,12 +582,12 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             }
 
             if (argTypes.size() != methodInfo->params.size()) {
-                error(expr->line, "method '" + fieldCallee->field + "' expects " + std::to_string(methodInfo->params.size()) + " arguments, got " + std::to_string(argTypes.size()));
+                error(expr->line, expr->column, "method '" + fieldCallee->field + "' expects " + std::to_string(methodInfo->params.size()) + " arguments, got " + std::to_string(argTypes.size()));
             } 
             else {
                 for (size_t j = 0; j < argTypes.size(); j++) {
                     if (argTypes[j] && methodInfo->params[j].second && !isImplicitlyConvertible(argTypes[j], methodInfo->params[j].second)) {
-                        error(expr->line, "method '" + fieldCallee->field + "' argument " + std::to_string(j + 1) + ": cannot convert '" + typeToString(argTypes[j]) + "' to '" + typeToString(methodInfo->params[j].second) + "'");
+                        error(expr->line, expr->column, "method '" + fieldCallee->field + "' argument " + std::to_string(j + 1) + ": cannot convert '" + typeToString(argTypes[j]) + "' to '" + typeToString(methodInfo->params[j].second) + "'");
                     }   //  Если переданные параметры не конвертируются в заданные
                 }
             }
@@ -600,11 +608,11 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
         //  Ищем функцию в таблице символов
         auto sym = table.resolve(callee->name);
         if (!sym) {
-            error(expr->line, "'" + callee->name + "' is not declared");
+            error(expr->line, expr->column, "'" + callee->name + "' is not declared");
             return nullptr;
         }
         if (sym->kind != SymbolKind::Function) {
-            error(expr->line, "'" + callee->name + "' is not a function");
+            error(expr->line, expr->column, "'" + callee->name + "' is not a function");
             return nullptr;
         }
 
@@ -621,14 +629,14 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
         //  print(x1, x2, ...) — 1+ аргументов примитивного типа или строк, выводятся через пробел
         if (callee->name == "print") {
             if (argTypes.empty()) {
-                error(expr->line, "'print' expects at least 1 argument, got 0");
+                error(expr->line, expr->column, "'print' expects at least 1 argument, got 0");
             }
             for (size_t i = 0; i < argTypes.size(); i++) {
                 if (!argTypes[i]) continue;
                 auto kind = argTypes[i]->kind;
                 bool isSupported = (kind == TypeKind::Bool || kind == TypeKind::String || kind == TypeKind::Char || kind == TypeKind::Int8  || kind == TypeKind::Int16 || kind == TypeKind::Int32 || kind == TypeKind::Int64 || kind == TypeKind::Uint8 || kind == TypeKind::Uint16 || kind == TypeKind::Uint32 || kind == TypeKind::Uint64 || kind == TypeKind::Float32 || kind == TypeKind::Float64 || kind == TypeKind::Array || kind == TypeKind::DynArray);
                 if (!isSupported)
-                    error(expr->line, "'print' argument " + std::to_string(i + 1) + " has unsupported type '" + typeToString(argTypes[i]) + "'");
+                    error(expr->line, expr->column, "'print' argument " + std::to_string(i + 1) + " has unsupported type '" + typeToString(argTypes[i]) + "'");
             }
             expr->resolvedType = makeType(TypeKind::Void);
             return expr->resolvedType;
@@ -637,12 +645,12 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
         //  len(x) — массив (статический или динамический) либо строка, возвращает int32
         if (callee->name == "len") {
             if (argTypes.size() != 1) {
-                error(expr->line, "'len' expects 1 argument, got " + std::to_string(argTypes.size()));
+                error(expr->line, expr->column, "'len' expects 1 argument, got " + std::to_string(argTypes.size()));
             }
             else if (argTypes[0]) {
                 auto kind = argTypes[0]->kind;
                 if (kind != TypeKind::Array && kind != TypeKind::DynArray && kind != TypeKind::String)
-                    error(expr->line, "'len' argument must be an array or string, got '" + typeToString(argTypes[0]) + "'");
+                    error(expr->line, expr->column, "'len' argument must be an array or string, got '" + typeToString(argTypes[0]) + "'");
             }
             expr->resolvedType = makeType(TypeKind::Int32);
             return expr->resolvedType;
@@ -651,13 +659,13 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
         //  push(arr: [T], elem: T) — добавить элемент в конец динамического массива
         if (callee->name == "push") {
             if (argTypes.size() != 2) {
-                error(expr->line, "'push' expects 2 arguments (array, element), got " + std::to_string(argTypes.size()));
+                error(expr->line, expr->column, "'push' expects 2 arguments (array, element), got " + std::to_string(argTypes.size()));
             }
             else if (argTypes[0] && argTypes[0]->kind != TypeKind::DynArray) {
-                error(expr->line, "'push' first argument must be a dynamic array '[T]', got '" + typeToString(argTypes[0]) + "'");
+                error(expr->line, expr->column, "'push' first argument must be a dynamic array '[T]', got '" + typeToString(argTypes[0]) + "'");
             }
             else if (argTypes[0] && argTypes[1] && !isImplicitlyConvertible(argTypes[1], argTypes[0]->elementType)) {
-                error(expr->line, "'push' element type mismatch: cannot convert '" + typeToString(argTypes[1]) + "' to '" + typeToString(argTypes[0]->elementType) + "'");
+                error(expr->line, expr->column, "'push' element type mismatch: cannot convert '" + typeToString(argTypes[1]) + "' to '" + typeToString(argTypes[0]->elementType) + "'");
             }
             expr->resolvedType = makeType(TypeKind::Void);
             return expr->resolvedType;
@@ -666,14 +674,15 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
         //  pop(arr: [T]) -> T — удалить и вернуть последний элемент массива
         if (callee->name == "pop") {
             if (argTypes.size() != 1) {
-                error(expr->line, "'pop' expects 1 argument (array), got " + std::to_string(argTypes.size()));
+                error(expr->line, expr->column, "'pop' expects 1 argument (array), got " + std::to_string(argTypes.size()));
                 return nullptr;
             }
             if (argTypes[0] && argTypes[0]->kind != TypeKind::DynArray) {
-                error(expr->line, "'pop' argument must be a dynamic array '[T]', got '" + typeToString(argTypes[0]) + "'");
+                error(expr->line, expr->column, "'pop' argument must be a dynamic array '[T]', got '" + typeToString(argTypes[0]) + "'");
                 return nullptr;
             }
-            expr->resolvedType = argTypes[0] ? argTypes[0]->elementType : nullptr;
+            if (argTypes[0]) expr->resolvedType = argTypes[0]->elementType;
+            else             expr->resolvedType = nullptr;
             return expr->resolvedType;
         }
 
@@ -689,12 +698,12 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             if (!arityOk) {
                 std::string least;
                 if (variadic) least = "at least ";
-                error(expr->line, "'" + callee->name + "' expects " + least + std::to_string(fixed) + " arguments, got " + std::to_string(argTypes.size()));
+                error(expr->line, expr->column, "'" + callee->name + "' expects " + least + std::to_string(fixed) + " arguments, got " + std::to_string(argTypes.size()));
             }
             else {  //  Типы фиксированных параметров
                 for (size_t j = 0; j < fixed; j++) {
                     if (argTypes[j] && sym->funcInfo->params[j].second && !typesEqual(argTypes[j], sym->funcInfo->params[j].second)) {
-                        error(expr->line, "argument " + std::to_string(j + 1) + " of '" + callee->name + "': expected '" + typeToString(sym->funcInfo->params[j].second) + "', got '" + typeToString(argTypes[j]) + "'");
+                        error(expr->line, expr->column, "argument " + std::to_string(j + 1) + " of '" + callee->name + "': expected '" + typeToString(sym->funcInfo->params[j].second) + "', got '" + typeToString(argTypes[j]) + "'");
                     }
                 }
             }
@@ -725,7 +734,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
                         return expr->resolvedType;
                     }
                 }
-                error(expr->line, "struct '" + objType->name + "' has no field '" + field->field + "'");
+                error(expr->line, expr->column, "struct '" + objType->name + "' has no field '" + field->field + "'");
             }   //  Не нашли поле
             return nullptr;
         }
@@ -745,12 +754,12 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
                     expr->resolvedType = method->second->returnType;
                     return expr->resolvedType;
                 }
-                error(expr->line, "class '" + objType->name + "' has no field or method '" + field->field + "'");
+                error(expr->line, expr->column, "class '" + objType->name + "' has no field or method '" + field->field + "'");
             }
             return nullptr;
         }
 
-        error(expr->line, "field access on non-struct/class type '" + typeToString(objType) + "'");
+        error(expr->line, expr->column, "field access on non-struct/class type '" + typeToString(objType) + "'");
         return nullptr;
     }
 
@@ -761,12 +770,12 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
         if (!objType) return nullptr;
 
         if (objType->kind != TypeKind::Array && objType->kind != TypeKind::DynArray && objType->kind != TypeKind::String) {
-            error(expr->line, "index operator on non-array type '" + typeToString(objType) + "'");
+            error(expr->line, expr->column, "index operator on non-array type '" + typeToString(objType) + "'");
             return nullptr;
         }
 
         if (indexType && !isIntType(indexType)) {   //  Индекс должен быть целым
-            error(expr->line, "array index must be integer, got '" + typeToString(indexType) + "'");
+            error(expr->line, expr->column, "array index must be integer, got '" + typeToString(indexType) + "'");
         }
 
         if (objType->kind == TypeKind::String)
@@ -780,7 +789,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
     //  то он становится эталоном и каждый элемент неявно приводится к нему (5 → 5.0).
     if (auto* arrLit = dynamic_cast<ArrayLiteral*>(expr)) {
         if (arrLit->elements.empty()) {     //  Если массив пуст
-            error(expr->line, "cannot infer type of empty array literal");
+            error(expr->line, expr->column, "cannot infer type of empty array literal");
             return nullptr;
         }
 
@@ -796,7 +805,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
         for (size_t j = 0; j < arrLit->elements.size(); j++) {
             auto elemType = analyzeExpr(arrLit->elements[j], target);
             if (target && elemType && !isImplicitlyConvertible(elemType, target)) {
-                error(expr->line, "array element " + std::to_string(j + 1) + ": cannot convert '" + typeToString(elemType) + "' to '" + typeToString(target) + "'");
+                error(expr->line, expr->column, "array element " + std::to_string(j + 1) + ": cannot convert '" + typeToString(elemType) + "' to '" + typeToString(target) + "'");
             }
             //  Прокидываем итоговый тип в элемент — кодоген увидит нужное представление (например, int 5 → float 5.0)
             if (target) arrLit->elements[j]->resolvedType = target;
@@ -810,7 +819,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
     if (auto* structLit = dynamic_cast<StructLiteral*>(expr)) {
         auto sym = table.resolve(structLit->name);
         if (!sym || sym->kind != SymbolKind::Struct) {
-            error(expr->line, "'" + structLit->name + "' is not a struct type");
+            error(expr->line, expr->column, "'" + structLit->name + "' is not a struct type");
             return nullptr;
         }
 
@@ -822,13 +831,13 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
                     if (fieldName == init.name) {
                         found = true;
                         if (valType && fieldType && !typesEqual(valType, fieldType)) {  //  Проверяем совместимость типов
-                            error(expr->line, "field '" + init.name + "' of '" + structLit->name + "': expected '" + typeToString(fieldType) + "', got '" + typeToString(valType) + "'");
+                            error(expr->line, expr->column, "field '" + init.name + "' of '" + structLit->name + "': expected '" + typeToString(fieldType) + "', got '" + typeToString(valType) + "'");
                         }
                         break;
                     }
                 }
                 if (!found){
-                    error(expr->line, "struct '" + structLit->name + "' has no field '" + init.name + "'");
+                    error(expr->line, expr->column, "struct '" + structLit->name + "' has no field '" + init.name + "'");
                 }
             }
         }
@@ -844,11 +853,11 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
         auto fromType = analyzeExpr(cast->value);   //  Начальный тип
         auto targetType = resolveTypeName(cast->targetType);    //  Нужный тип
         if (!targetType) {
-            error(expr->line, "unknown type '" + cast->targetType + "' in cast");
+            error(expr->line, expr->column, "unknown type '" + cast->targetType + "' in cast");
             return nullptr;
         }
         if (fromType && !isCastable(fromType, targetType)) {
-            error(expr->line, "cannot cast '" + typeToString(fromType) + "' to '" + typeToString(targetType) + "'");
+            error(expr->line, expr->column, "cannot cast '" + typeToString(fromType) + "' to '" + typeToString(targetType) + "'");
         }
         expr->resolvedType = targetType;
         return expr->resolvedType;
@@ -858,17 +867,17 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
     if (auto* namespase = dynamic_cast<NamespaceAccess*>(expr)) {
         auto namespaceSym = table.resolve(namespase->nameSpace);    //  Ищем namespace в таблице
         if (!namespaceSym) {
-            error(expr->line, "'" + namespase->nameSpace + "' is not declared");
+            error(expr->line, expr->column, "'" + namespase->nameSpace + "' is not declared");
             return nullptr;
         }
         if (namespaceSym->kind != SymbolKind::Namespace || !namespaceSym->namespaceScope) {
-            error(expr->line, "'" + namespase->nameSpace + "' is not a namespace");
+            error(expr->line, expr->column, "'" + namespase->nameSpace + "' is not a namespace");
             return nullptr;
         }
         //  Ищем member внутри scope namespace
         auto it = namespaceSym->namespaceScope->symbols.find(namespase->member);
         if (it == namespaceSym->namespaceScope->symbols.end()) {
-            error(expr->line, "'" + namespase->member + "' is not declared in namespace '" + namespase->nameSpace + "'");
+            error(expr->line, expr->column, "'" + namespase->member + "' is not declared in namespace '" + namespase->nameSpace + "'");
             return nullptr;
         }
         expr->resolvedType = it->second->type;
@@ -879,7 +888,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
     if (auto* newExpr = dynamic_cast<NewExpr*>(expr)) {
         auto classSym = table.resolve(newExpr->className);
         if (!classSym || classSym->kind != SymbolKind::Class) {
-            error(expr->line, "'" + newExpr->className + "' is not a class");
+            error(expr->line, expr->column, "'" + newExpr->className + "' is not a class");
             return nullptr;
         }
 
@@ -887,7 +896,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
         if (classSym->classInfo && classSym->classInfo->constructor) {
             auto& constructorParams = classSym->classInfo->constructor->params;
             if (newExpr->args.size() != constructorParams.size()) {
-                error(expr->line, "constructor of '" + newExpr->className + "' expects " + std::to_string(constructorParams.size()) + " arguments, got " + std::to_string(newExpr->args.size()));
+                error(expr->line, expr->column, "constructor of '" + newExpr->className + "' expects " + std::to_string(constructorParams.size()) + " arguments, got " + std::to_string(newExpr->args.size()));
             }
             for (size_t j = 0; j < newExpr->args.size(); j++) {
                 //  Пробрасываем тип параметра конструктора для контекстной типизации 
@@ -899,14 +908,14 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
                 auto argType = analyzeExpr(newExpr->args[j], expectedArg);
                 if (j < constructorParams.size() && argType && constructorParams[j].second) {
                     if (!isImplicitlyConvertible(argType, constructorParams[j].second)) {
-                        error(expr->line, "constructor argument " + std::to_string(j + 1) + ": cannot convert '" + typeToString(argType) + "' to '" + typeToString(constructorParams[j].second) + "'");
+                        error(expr->line, expr->column, "constructor argument " + std::to_string(j + 1) + ": cannot convert '" + typeToString(argType) + "' to '" + typeToString(constructorParams[j].second) + "'");
                     }
                 }
             }
         } 
         else {
             if (!newExpr->args.empty())     //  Нет конструктора — аргументов быть не должно
-                error(expr->line, "class '" + newExpr->className + "' has no constructor");
+                error(expr->line, expr->column, "class '" + newExpr->className + "' has no constructor");
             for (auto* arg : newExpr->args)
                 analyzeExpr(arg);
         }
@@ -961,14 +970,14 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
             for (auto& param : func->params) {
                 auto paramType = resolveTypeName(param.typeName);
                 if (!paramType) {
-                    error(decl->line, "unknown parameter type '" + param.typeName + "' in function '" + func->name + "'");
+                    error(decl->line, decl->column, "unknown parameter type '" + param.typeName + "' in function '" + func->name + "'");
                 }
                 sym->funcInfo->params.push_back({param.name, paramType});
             }
 
             auto result = table.declare(sym);
             if (!result) {
-                error(decl->line, result.error());
+                error(decl->line, decl->column, result.error());
             }
         }
         
@@ -982,14 +991,14 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
             for (auto& field : structDecl->fields) {
                 auto fieldType = resolveTypeName(field.typeName);
                 if (!fieldType)
-                    error(decl->line, "unknown field type '" + field.typeName + "' in struct '" + structDecl->name + "'");
+                    error(decl->line, decl->column, "unknown field type '" + field.typeName + "' in struct '" + structDecl->name + "'");
                 sym->structInfo->fields.push_back({field.name, fieldType});
 
                 //  Проверяем default-значение поля: тип должен быть совместим с объявленным типом поля
                 if (field.defaultValue) {
                     auto defType = analyzeExpr(field.defaultValue, fieldType);
                     if (defType && fieldType && !isImplicitlyConvertible(defType, fieldType)) {
-                        error(decl->line, "default value of field '" + field.name + "' in struct '" + structDecl->name
+                        error(decl->line, decl->column, "default value of field '" + field.name + "' in struct '" + structDecl->name
                             + "': cannot convert '" + typeToString(defType) + "' to '" + typeToString(fieldType) + "'");
                     }
                 }
@@ -1001,7 +1010,7 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
 
             auto result = table.declare(sym);
             if (!result) {
-                error(decl->line, result.error());
+                error(decl->line, decl->column, result.error());
             }
         }
         else if (auto* alias = dynamic_cast<TypeAlias*>(decl)) {    //  Type alias — регистрируем имя, разрешаем оригинальный тип
@@ -1010,11 +1019,11 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
             sym->kind = SymbolKind::TypeAlias;
             sym->type = resolveTypeName(alias->original);
             if (!sym->type) {
-                error(decl->line, "unknown type '" + alias->original + "' in type alias '" + alias->alias + "'");
+                error(decl->line, decl->column, "unknown type '" + alias->original + "' in type alias '" + alias->alias + "'");
             }
             auto result = table.declare(sym);
             if (!result) {
-                error(decl->line, result.error());
+                error(decl->line, decl->column, result.error());
             }
         }
         else if (auto* namespase = dynamic_cast<NamespaceDecl*>(decl)) {   //  Namespace 
@@ -1024,7 +1033,7 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
 
             auto result = table.declare(sym);
             if (!result) {
-                error(decl->line, result.error());
+                error(decl->line, decl->column, result.error());
             }
 
             table.enterScope(); //  новый namespace -> новая область видимости
@@ -1043,7 +1052,7 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
             for (auto& field : clas->fields) {  //  Поля класса
                 auto fieldType = resolveTypeName(field.typeName);
                 if (!fieldType) {
-                    error(decl->line, "unknown field type '" + field.typeName + "' in class '" + clas->name + "'");
+                    error(decl->line, decl->column, "unknown field type '" + field.typeName + "' in class '" + clas->name + "'");
                 }
                 sym->classInfo->fields.push_back({field.name, fieldType});
             }
@@ -1076,7 +1085,7 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
 
             auto result = table.declare(sym);
             if (!result)
-                error(decl->line, result.error());
+                error(decl->line, decl->column, result.error());
         }
         else if (auto* exp = dynamic_cast<ExportDecl*>(decl)) { //  Export 
             std::vector<Stmt*> inner;
@@ -1120,17 +1129,17 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         if (var->isAuto) {  //  auto — выводим тип из инициализатора (без контекста — литералы дают int32/float64)
             std::shared_ptr<Type> initType = analyzeExpr(var->init);
             if (!initType) {
-                error(stmt->line, "'auto' requires initializer to infer type for '" + var->name + "'");
+                error(stmt->line, stmt->column, "'auto' requires initializer to infer type for '" + var->name + "'");
             }
             sym->type = initType;
         }
         else {  //  Явный тип — разрешаем имя типа
             sym->type = resolveTypeName(var->typeName);
             if (!sym->type) {
-                error(stmt->line, "unknown type '" + var->typeName + "'");  //  Неизвестный тип
+                error(stmt->line, stmt->column, "unknown type '" + var->typeName + "'");  //  Неизвестный тип
             }
             else if (sym->type->kind == TypeKind::Void) {   // void тип
-                error(stmt->line, "cannot declare variable '" + var->name + "' with type 'void'");
+                error(stmt->line, stmt->column, "cannot declare variable '" + var->name + "' with type 'void'");
             }
 
             //  Анализируем инициализатор, передавая тип переменной как ожидаемый
@@ -1140,14 +1149,14 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             //  Допускается widening: int32 x = int8_val — ок
             if (initType && sym->type) {
                 if (!isImplicitlyConvertible(initType, sym->type)) {
-                    error(stmt->line, "cannot initialize '" + var->name + "' of type '" + typeToString(sym->type) + "' with '" + typeToString(initType) + "'");
+                    error(stmt->line, stmt->column, "cannot initialize '" + var->name + "' of type '" + typeToString(sym->type) + "' with '" + typeToString(initType) + "'");
                 }
             }
         }
 
         auto result = table.declare(sym);   //  Сохраняем в таблицу символов
         if (!result) {
-            error(stmt->line, result.error());
+            error(stmt->line, stmt->column, result.error());
         }
     }
     else if (auto* block = dynamic_cast<Block*>(stmt)) {    //  Если это блок то соответственно анализируем блок
@@ -1167,12 +1176,12 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                         }
                     }
                     if (!fieldType) {
-                        error(stmt->line, "struct '" + id->name + "' has no field '" + fa->field + "'");
+                        error(stmt->line, stmt->column, "struct '" + id->name + "' has no field '" + fa->field + "'");
                         return;
                     }
                     auto valType = analyzeExpr(assign->value, fieldType);
                     if (valType && !isImplicitlyConvertible(valType, fieldType)) {
-                        error(stmt->line, "cannot redefine default of '" + id->name + "." + fa->field
+                        error(stmt->line, stmt->column, "cannot redefine default of '" + id->name + "." + fa->field
                             + "': expected '" + typeToString(fieldType) + "', got '" + typeToString(valType) + "'");
                     }
                     return;
@@ -1186,7 +1195,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         if (auto* id = dynamic_cast<Identifier*>(assign->target)) {
             auto sym = table.resolve(id->name);     //  Находим инициализацию в таблице
             if (sym && sym->isConst) {   //  Если константная то не можем присвоить
-                error(stmt->line, "cannot assign to const variable '" + id->name + "'");
+                error(stmt->line, stmt->column, "cannot assign to const variable '" + id->name + "'");
             }
             if (sym) {
                 sym->isInitialized = true; //  Помечаем переменную как инициализированную 
@@ -1195,14 +1204,14 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
 
         if (targetType && valueType) {  //  Проверяем совместимость типов 
             if (!isImplicitlyConvertible(valueType, targetType)) {
-                error(stmt->line, "type mismatch in assignment: cannot assign '" + typeToString(valueType) + "' to '" + typeToString(targetType) + "'");
+                error(stmt->line, stmt->column, "type mismatch in assignment: cannot assign '" + typeToString(valueType) + "' to '" + typeToString(targetType) + "'");
             }
         }
     }
     else if (auto* ifStmt = dynamic_cast<If*>(stmt)) {  //  if
         auto condType = analyzeExpr(ifStmt->condition);
         if (condType && condType->kind != TypeKind::Bool) {   //  Условие всегда типа bool
-            error(stmt->line, "if condition must be bool, got '" + typeToString(condType) + "'");
+            error(stmt->line, stmt->column, "if condition must be bool, got '" + typeToString(condType) + "'");
         }
         analyzeStmt(ifStmt->thenBranch);
         if (ifStmt->elseBranch) {
@@ -1212,7 +1221,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
     else if (auto* whileStmt = dynamic_cast<While*>(stmt)) {  //  while 
         auto condType = analyzeExpr(whileStmt->condition);
         if (condType && condType->kind != TypeKind::Bool) { // условие также всегда должно быть bool
-            error(stmt->line, "while condition must be bool, got '" + typeToString(condType) + "'");
+            error(stmt->line, stmt->column, "while condition must be bool, got '" + typeToString(condType) + "'");
         }
         loopDepth++;    //  Вошли в цикл на +1 глубину вложенности
         analyzeStmt(whileStmt->body);   //  Осмотрели чё там делается
@@ -1220,12 +1229,12 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
     }
     else if (dynamic_cast<Break*>(stmt)) {  //  Break
         if (loopDepth == 0) {   //  Break нельзя ставить на нулевой глубине, то бишь вне цикла
-            error(stmt->line, "'break' outside of loop");   
+            error(stmt->line, stmt->column, "'break' outside of loop");   
         }
     }
     else if (dynamic_cast<Continue*>(stmt)) {
         if (loopDepth == 0) {   //  Continue тоже
-            error(stmt->line, "'continue' outside of loop");
+            error(stmt->line, stmt->column, "'continue' outside of loop");
         }
     }
     else if (auto* ret = dynamic_cast<Return*>(stmt)) {  // Return
@@ -1233,13 +1242,13 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             auto valType = analyzeExpr(ret->value, currentReturnType);  //  Тип возврата функции — ожидаемый тип для контекстной типизации 
             if (valType && currentReturnType) {
                 if (!isImplicitlyConvertible(valType, currentReturnType)) {
-                    error(stmt->line, "return type mismatch: expected '" + typeToString(currentReturnType) + "', got '" + typeToString(valType) + "'");
+                    error(stmt->line, stmt->column, "return type mismatch: expected '" + typeToString(currentReturnType) + "', got '" + typeToString(valType) + "'");
                 }
             }
         } 
         else {  //  return; без значения — функция должна быть void
             if (currentReturnType && currentReturnType->kind != TypeKind::Void) {
-                error(stmt->line, "return without value in non-void function");
+                error(stmt->line, stmt->column, "return without value in non-void function");
             }
         }
     }
@@ -1271,7 +1280,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
 
                 auto paramResult = table.declare(paramSym);
                 if (!paramResult) {
-                    error(stmt->line, paramResult.error());
+                    error(stmt->line, stmt->column, paramResult.error());
                 }
             }
         }
@@ -1284,7 +1293,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         //  Проверяем что non-void функция возвращает значение на всех путях
         if (currentReturnType && currentReturnType->kind != TypeKind::Void) {
             if (!alwaysReturns(func->body)) {
-                error(stmt->line, "function '" + func->name + "' does not return a value on all paths");
+                error(stmt->line, stmt->column, "function '" + func->name + "' does not return a value on all paths");
             }
         }
 
@@ -1352,7 +1361,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
 
             if (currentReturnType && currentReturnType->kind != TypeKind::Void) {   //  Не void метод как и функция обязан что-то вернуть
                 if (!alwaysReturns(method->body)) {
-                    error(stmt->line, "method '" + clas->name + "." + method->name + "' does not return a value on all paths");
+                    error(stmt->line, stmt->column, "method '" + clas->name + "." + method->name + "' does not return a value on all paths");
                 }
             }
             currentReturnType = prevRetType;    //  Возвращаем предыдущий тип возврата
@@ -1370,6 +1379,16 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             selfSym->type = selfieldType;
             selfSym->isInitialized = true;
             table.declare(selfSym);
+
+            //  Поля класса видны в теле конструктора как обычные имена
+            for (auto& [fieldName, fieldType] : classSym->classInfo->fields) {
+                auto fieldSym = std::make_shared<Symbol>();
+                fieldSym->name = fieldName;
+                fieldSym->kind = SymbolKind::Variable;
+                fieldSym->type = fieldType;
+                fieldSym->isInitialized = true;
+                table.declare(fieldSym);
+            }
 
             if (classSym->classInfo->constructor) {
                 for (size_t j = 0; j < clas->constructor->params.size(); j++) {
@@ -1405,6 +1424,16 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             selfSym->isInitialized = true;
             table.declare(selfSym);
 
+            //  Поля класса видны в теле деструктора как обычные имена
+            for (auto& [fieldName, fieldType] : classSym->classInfo->fields) {
+                auto fieldSym = std::make_shared<Symbol>();
+                fieldSym->name = fieldName;
+                fieldSym->kind = SymbolKind::Variable;
+                fieldSym->type = fieldType;
+                fieldSym->isInitialized = true;
+                table.declare(fieldSym);
+            }
+
             for (auto* stmt : clas->destructor->body->statements) {
                 analyzeStmt(stmt);
             }
@@ -1415,7 +1444,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
     else if (auto* del = dynamic_cast<DeleteStmt*>(stmt)) {
         auto valType = analyzeExpr(del->value);
         if (valType && valType->kind != TypeKind::Class) {
-            error(stmt->line, "delete requires a class instance, got '" + typeToString(valType) + "'");
+            error(stmt->line, stmt->column, "delete requires a class instance, got '" + typeToString(valType) + "'");
         }
     }
     else if (auto* namespase = dynamic_cast<NamespaceDecl*>(stmt)) {    //  Входим в сохранённый scope и анализируем тела объявлений
@@ -1544,7 +1573,7 @@ void SemanticAnalyzer::processCImport(ImportDecl* imp) {
     CXErrorCode err = clang_parseTranslationUnit2(index, virtualName, args, 2, &unsaved, 1, CXTranslationUnit_SkipFunctionBodies, &res);
     //  Парсим функции без тел. 
     if (err != CXError_Success || !res) {   
-        error(imp->line, "libclang failed to parse header '" + imp->path + "'");
+        error(imp->line, imp->column, "libclang failed to parse header '" + imp->path + "'");
         clang_disposeIndex(index);
         return;
     }
@@ -1590,7 +1619,7 @@ void SemanticAnalyzer::processImport(ImportDecl* imp) {
     std::filesystem::path target = base / imp->path;    //  Разрешаем путь относительно текущего файла
 
     if (!std::filesystem::exists(target)) {
-        error(imp->line, "cannot open imported file '" + imp->path + "'");
+        error(imp->line, imp->column, "cannot open imported file '" + imp->path + "'");
         return;
     }
 
@@ -1601,7 +1630,7 @@ void SemanticAnalyzer::processImport(ImportDecl* imp) {
 
     std::ifstream file(absPath);    //  Читаем файл
     if (!file.is_open()) {
-        error(imp->line, "cannot open imported file '" + imp->path + "'");
+        error(imp->line, imp->column, "cannot open imported file '" + imp->path + "'");
         return;
     }
     std::stringstream buf;
@@ -1610,13 +1639,13 @@ void SemanticAnalyzer::processImport(ImportDecl* imp) {
 
     auto tokens = tokenize(source);     //  Токенизируем
     if (!tokens) {
-        error(imp->line, "in '" + imp->path + "': " + tokens.error());
+        error(imp->line, imp->column, "in '" + imp->path + "': " + tokens.error());
         return;
     }
 
     auto nodes = parse(*tokens);    //  Парсим
     if (!nodes) {
-        error(imp->line, "in '" + imp->path + "': " + nodes.error());
+        error(imp->line, imp->column, "in '" + imp->path + "': " + nodes.error());
         return;
     }
 

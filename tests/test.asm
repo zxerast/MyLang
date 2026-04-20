@@ -1,7 +1,6 @@
-section .data
-arr0: dq 10,20,30
-
 section .rodata
+__rt_div_zero: db "division by zero", 0
+__rt_bounds:   db "array index out of bounds", 0
 str0: db `Hello, `, 0
 str1: db `World!`, 0
 str2: db `x `, 208, ``, 177, ``, 208, ``, 190, ``, 208, ``, 187, ``, 209, ``, 140, ``, 209, ``, 136, ``, 208, ``, 181, ` 5`, 0
@@ -12,16 +11,19 @@ section .text
 extern print_int
 extern print_string
 extern print_bool
+extern print_char
+extern print_float
 extern print_space
 extern print_newline
-extern input
-extern strlen
-extern panic
-extern exit
-extern alloc
-extern free
-extern push
-extern pop
+extern lang_input
+extern lang_strlen
+extern lang_panic
+extern lang_exit
+extern lang_alloc
+extern lang_free
+extern lang_push
+extern lang_pop
+extern lang_strcat
 
 global main
 main:
@@ -60,6 +62,12 @@ main:
     mov rax, [rbp-16]
     mov rbx, rax
     pop rax
+    test rbx, rbx
+    jnz .modok0
+    lea rdi, [rel __rt_div_zero]
+    mov rsi, 7
+    call lang_panic
+.modok0:
     cqo
     idiv rbx
     mov rax, rdx
@@ -73,9 +81,11 @@ main:
     mov rax, [rbp-24]
     push rax
     mov rax, [rbp-32]
-    mov rbx, rax
-    pop rax
-    add rax, rbx
+    push rax
+    mov rsi, [rsp]
+    mov rdi, [rsp+8]
+    call lang_strcat
+    add rsp, 16
     mov rdi, rax
     call print_string
     call print_newline
@@ -116,21 +126,21 @@ main:
     setg al
     movzx rax, al
     test rax, rax
-    jz .else0
+    jz .else1
     lea rax, [rel str2]
     mov rdi, rax
     call print_string
     call print_newline
-    jmp .endif1
-.else0:
+    jmp .endif2
+.else1:
     lea rax, [rel str3]
     mov rdi, rax
     call print_string
     call print_newline
-.endif1:
+.endif2:
     mov rax, 0
     mov [rbp-48], rax
-.while2:
+.while3:
     mov rax, [rbp-48]
     push rax
     mov rax, 5
@@ -140,36 +150,68 @@ main:
     setl al
     movzx rax, al
     test rax, rax
-    jz .endwhile3
+    jz .endwhile4
     mov rax, [rbp-48]
     mov rdi, rax
     call print_int
     call print_newline
     inc qword [rbp-48]
     mov rax, [rbp-48]
-    jmp .while2
-.endwhile3:
-    lea rax, [rel arr0]
-    mov [rbp-60], rax
-    mov rax, [rbp-60]
+    jmp .while3
+.endwhile4:
+    mov rdi, 24
+    call lang_alloc
+    mov [rbp-72], rax
+    mov qword [rbp-64], 3
+    mov qword [rbp-56], 3
+    push qword [rbp-72]
+    mov rax, 10
+    pop rbx
+    mov [rbx + 0], rax
+    push qword [rbp-72]
+    mov rax, 20
+    pop rbx
+    mov [rbx + 8], rax
+    push qword [rbp-72]
+    mov rax, 30
+    pop rbx
+    mov [rbx + 16], rax
+    lea rax, [rbp-72]
     push rax
     mov rax, 0
     mov rbx, rax
     pop rax
+    mov rcx, [rax + 8]
+    cmp rbx, rcx
+    jb .bndok5
+    lea rdi, [rel __rt_bounds]
+    mov rsi, 36
+    call lang_panic
+.bndok5:
+    mov rax, [rax]
     mov rax, [rax + rbx*8]
     mov rdi, rax
     call print_int
     call print_newline
-    mov rax, [rbp-60]
+    lea rax, [rbp-72]
     push rax
     mov rax, 2
     mov rbx, rax
     pop rax
+    mov rcx, [rax + 8]
+    cmp rbx, rcx
+    jb .bndok6
+    lea rdi, [rel __rt_bounds]
+    mov rsi, 37
+    call lang_panic
+.bndok6:
+    mov rax, [rax]
     mov rax, [rax + rbx*8]
     mov rdi, rax
     call print_int
     call print_newline
-    mov rax, [rbp-52]
+    lea rax, [rbp-72]
+    mov rax, [rax + 8]
     mov rdi, rax
     call print_int
     call print_newline
@@ -179,9 +221,9 @@ main:
     push rax
     pop rdi
     pop rsi
-    call lang_add
-    mov [rbp-72], rax
-    mov rax, [rbp-72]
+    call add
+    mov [rbp-80], rax
+    mov rax, [rbp-80]
     mov rdi, rax
     call print_int
     call print_newline
@@ -191,7 +233,7 @@ main:
     push rax
     pop rdi
     pop rsi
-    call lang_add
+    call add
     mov rdi, rax
     call print_int
     call print_newline
@@ -201,7 +243,7 @@ main:
     push rax
     pop rdi
     pop rsi
-    call lang_add
+    call add
     push rax
     mov rax, 7
     mov rbx, rax
@@ -210,12 +252,12 @@ main:
     sete al
     movzx rax, al
     test rax, rax
-    jz .endif5
+    jz .endif8
     lea rax, [rel str4]
     mov rdi, rax
     call print_string
     call print_newline
-.endif5:
+.endif8:
     mov rax, 0
     jmp .end_of_main
 .end_of_main:

@@ -2,7 +2,7 @@
 ;  DynArray layout (24 байта): [arr+0]=ptr, [arr+8]=len, [arr+16]=cap
 
 section .rodata
-pop_empty_msg: db "runtime: pop from empty array", 0
+pop_empty_msg: db "pop from empty array", 0
 
 section .text
 
@@ -76,17 +76,19 @@ lang_push:
     ret
 
 ;  ──────────────────────────────────────────────────────────────
-;  pop (rdi = DynArray*) → rax = последний элемент
-;  Если len == 0 — lang_panic и выход с кодом 1.
+;  pop (rdi = DynArray*, rsi = номер строки) → rax = последний элемент
+;  Если len == 0 — lang_panic(pop_empty_msg, rsi) и выход с кодом 1.
 ;  ──────────────────────────────────────────────────────────────
 global lang_pop
 lang_pop:
     push rbp
     mov rbp, rsp
     push rbx
-    sub rsp, 8                      ;  выравнивание
+    push r12
+    sub rsp, 8                      ;  выравнивание (2 push + sub 8 = 24 → rsp%16==0)
 
     mov rbx, rdi
+    mov r12, rsi                    ;  сохраняем номер строки для возможного panic
     mov rax, [rbx+8]                ;  len
     test rax, rax
     jz .lpo_empty
@@ -97,6 +99,7 @@ lang_pop:
     mov rax, [rcx+rax*8]            ;  rax = ptr[new_len]
 
     add rsp, 8
+    pop r12
     pop rbx
     mov rsp, rbp
     pop rbp
@@ -104,4 +107,5 @@ lang_pop:
 
 .lpo_empty:
     lea rdi, [rel pop_empty_msg]
+    mov rsi, r12
     call lang_panic

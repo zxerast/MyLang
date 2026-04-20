@@ -115,18 +115,21 @@ Token typeIdentifier(const std::string& elem){
     }
 }
 
-std::expected<std::vector<Token>, std::string> tokenize(const std::string& source){
+std::expected<std::vector<Token>, std::string> tokenize(const std::string& source, const std::string& filePath){
     std::vector<Token> res;
     int line = 1;
+    size_t lineStart = 0;
 
     for(size_t i = 0; i < source.size(); i++){
         bool hasDot = false;
         size_t prevSize = res.size();
+        int startCol = static_cast<int>(i - lineStart) + 1;
+        int startLine = line;
         switch (source[i]){
             case ' ':
             case '\t':
             case '\r': break;
-            case '\n': line++; break;
+            case '\n': line++; lineStart = i + 1; break;
             case '*': res.emplace_back(TokenType::Multiply, std::string(1,  '*')); break;
             case '%': res.emplace_back(TokenType::Modulo, std::string(1, '%')); break;
             case '(': res.emplace_back(TokenType::LeftParen, std::string(1, '(')); break;
@@ -166,6 +169,7 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
                     while (i < source.size() && source[i] != '\n'){
                         i++;
                     }
+                    i--;
                 }
                 else{
                     res.emplace_back(TokenType::Divide, std::string(1, '/'));
@@ -213,7 +217,7 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
                     i++;
                 }
                 else{
-                    return std::unexpected("Ошибка лексера: неожиданный символ '&'");
+                    return std::unexpected(filePath + ":" + std::to_string(startLine) + ":" + std::to_string(startCol) + ": error: unexpected character '&'");
                 }
                 break;
             case '|':
@@ -222,7 +226,7 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
                     i++;
                 }
                 else{
-                    return std::unexpected("Ошибка лексера: неожиданный символ '|'");
+                    return std::unexpected(filePath + ":" + std::to_string(startLine) + ":" + std::to_string(startCol) + ": error: unexpected character '|'");
                 }
                 break;
             case ':':
@@ -251,7 +255,7 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
                         else if (esc == '"')  str.push_back('"');
                         else if (esc == '\'') str.push_back('\'');
                         else {
-                            return std::unexpected("Ошибка лексера: неизвестная escape-последовательность \\" + std::string(1, esc));
+                            return std::unexpected(filePath + ":" + std::to_string(startLine) + ":" + std::to_string(startCol) + ": error: unknown escape sequence '\\" + std::string(1, esc) + "'");
                         }
                         i += 2;
                         continue;
@@ -259,7 +263,7 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
                     str.push_back(source[i++]);
                 }
                 if (i >= source.size() || source[i] != '"'){
-                    return std::unexpected("Ошибка лексера: незакрытый строковый литерал");
+                    return std::unexpected(filePath + ":" + std::to_string(startLine) + ":" + std::to_string(startCol) + ": error: unterminated string literal");
                 }
                 res.emplace_back(TokenType::StringLit, str);
                 break;
@@ -281,14 +285,14 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
                         if (source[i] == '.'){
                             type = SubType::Float;
                             if (!isdigit(source[i - 1])){
-                                return std::unexpected("Ошибка лексера: некорректный литерал с плавающей точкой");
+                                return std::unexpected(filePath + ":" + std::to_string(startLine) + ":" + std::to_string(startCol) + ": error: malformed floating-point literal");
                             }
 
                             if (hasDot == false){
                                 hasDot = true;
                             }
                             else{
-                                return std::unexpected("Ошибка лексера: несколько точек в числовом литерале");
+                                return std::unexpected(filePath + ":" + std::to_string(startLine) + ":" + std::to_string(startCol) + ": error: multiple dots in numeric literal");
                             }
                         }
                         elem.push_back(source[i++]);
@@ -297,15 +301,19 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
                     res.emplace_back(TokenType::Number, type, elem);
                 }
                 else{
-                    return std::unexpected(std::string("Ошибка лексера: неожиданный символ '") + source[i] + "'");
+                    return std::unexpected(filePath + ":" + std::to_string(startLine) + ":" + std::to_string(startCol) + ": error: unexpected character '" + std::string(1, source[i]) + "'");
                 }
                 break;
         }
-        if (res.size() > prevSize)
-            res.back().line = line;
+        if (res.size() > prevSize){
+            res.back().line = startLine;
+            res.back().column = startCol;
+        }
     }
+    int endCol = static_cast<int>(source.size() - lineStart) + 1;
     res.emplace_back(TokenType::End, std::string(1, ' '));
     res.back().line = line;
+    res.back().column = endCol;
 
     return res;
 }

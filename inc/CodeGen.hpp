@@ -35,6 +35,10 @@ class CodeGen {     //  Буферы секций — собираем в них
     std::string currentEndLabel; //  Метка конца функции для return
     std::vector<LoopLabels> loopStack;  //  Метки break и continue
 
+    //  Классовые локалки текущей функции — порядок объявления, для scope-exit вызова деструкторов.
+    //  Пара (offset, className). Заполняется в compileStmt(VarDecl), очищается в compileFunction.
+    std::vector<std::pair<int, std::string>> classLocals;
+
     std::unordered_map<std::string, std::string> stringPool;    //  Пул строковых литералов: текст → метка
 
     std::unordered_set<std::string> externCFunctions;   //  Имена C-функций, которые нужно объявить как extern
@@ -57,6 +61,12 @@ class CodeGen {     //  Буферы секций — собираем в них
 
     int allocLocal(const std::string& name, const std::shared_ptr<Type>& type); //  Выделение локальной переменной в текущем фрейме
     const LocalVar* findLocal(const std::string& name) const;
+
+    std::vector<VarDecl*> globalVars;                                              //  Глобальные переменные в порядке объявления — для детерминированной инициализации
+    std::unordered_map<std::string, std::shared_ptr<Type>> globals;                //  Имя глобалки -> её тип (нужен для размера слота и ветки DynArray)
+    bool isGlobal(const std::string& name) const;
+    void compileGlobalInit(VarDecl* var);                                          //  Инициализация одной глобалки в прологе main
+    bool emitDynArrayAddr(Expr* e, const char* reg);                              //  Адрес DynArray-источника (локалка / self-поле / ClassName.field / глобалка) в reg
 
     void collectLayout(const std::string& name, const std::vector<StructField>& fields); //  Запоминает layout полей struct/class (поле = qword)
     void collectDecls(Stmt* decl);                                                       //  Обходит AST и регистрирует layout'ы struct/class

@@ -5,11 +5,20 @@
 
 struct Parser {
     const std::vector<Token>& source;
+    const std::string filePath;
     size_t i = 0;
 
-    Parser(const std::vector<Token>& source) : source(source) {}
+    Parser(const std::vector<Token>& source, const std::string& filePath) : source(source), filePath(filePath) {}
 
-    int curLine() const { return i < source.size() ? source[i].line : 0; }
+    int curLine() const {
+        if (i < source.size()) return source[i].line;
+        return 0;
+    }
+
+    int curColumn() const {
+        if (i < source.size()) return source[i].column;
+        return 0;
+    }
 
     //  Разбирает имя типа: int, int[], int[3], int[][], int[3][4], Point и т.д.
     //  Сначала читает базовый тип, потом цепочку суффиксов [] или [N]
@@ -17,7 +26,7 @@ struct Parser {
     std::expected<std::string, std::string> parseTypeName() {
         //  Базовый тип: int, string, Point и т.д.
         if (i >= source.size() || (source[i].type != TokenType::TypeName && source[i].type != TokenType::Iden)) {
-            return std::unexpected("Ошибка парсера: ожидалось имя типа");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected type name");
         }
         std::string result = source[i++].lexeme;
 
@@ -35,13 +44,13 @@ struct Parser {
                 std::string size = source[i++].lexeme;
 
                 if (i >= source.size() || source[i].type != TokenType::RightBracket) {
-                    return std::unexpected("Ошибка парсера: ожидалась ']' после размера массива");
+                    return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ']' after array size");
                 }
                 i++;  //  съели ']'
                 result += "[" + size + "]";
             }
             else {
-                return std::unexpected("Ошибка парсера: ожидался ']' или размер в типе массива");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ']' or array size in array type");
             }
         }
 
@@ -69,7 +78,7 @@ struct Parser {
         // нулевая инструкция ";"
         if (i < source.size() && source[i].type == TokenType::Separator){
             auto* node = new ExprStmt();
-            node->line = curLine();
+            node->line = curLine(); node->column = curColumn();
             i++;
             return node;
         }
@@ -88,15 +97,15 @@ struct Parser {
 
         // delete expr;
         if (i < source.size() && source[i].type == TokenType::Delete) {
-            int ln = curLine();
+            int ln = curLine(); int col = curColumn();
             i++; // съели 'delete'
             auto expr = parseEquasion();
             if (!expr) return std::unexpected(expr.error());
             if (i >= source.size() || source[i].type != TokenType::Separator)
-                return std::unexpected("Ошибка парсера: ожидался ';' после delete");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ';' after delete");
             i++; // съели ';'
             auto* node = new DeleteStmt();
-            node->line = ln;
+            node->line = ln; node->column = col;
             node->value = *expr;
             return node;
         }
@@ -118,12 +127,12 @@ struct Parser {
             if (!rhs) return std::unexpected(rhs.error());
 
             if (i >= source.size() || source[i].type != TokenType::Separator){
-                return std::unexpected("Ошибка парсера: ожидался ';' после присваивания");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ';' after assignment");
             }
             i++;
 
             auto *node = new Assign;
-            node->line = (*expr)->line;
+            node->line = (*expr)->line; node->column = (*expr)->column;
             node->target = *expr;
             node->value = *rhs;
             return node;
@@ -131,22 +140,22 @@ struct Parser {
 
         // выражение как инструкция: expr ;
         if (i >= source.size() || source[i].type != TokenType::Separator){
-            return std::unexpected("Ошибка парсера: ожидался ';' после выражения");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ';' after expression");
         }
         i++;
 
         auto *node = new ExprStmt;
-        node->line = (*expr)->line;
+        node->line = (*expr)->line; node->column = (*expr)->column;
         node->expr = *expr;
         return node;
     }
 
     std::expected<Stmt*, std::string> parseIf(){
-        int ln = curLine();
+        int ln = curLine(); int col = curColumn();
         i++; // съели 'if'
 
         if (i >= source.size() || source[i].type != TokenType::LeftParen){
-            return std::unexpected("Ожидалась '(' после if");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '(' after 'if'");
         }
         i++;
 
@@ -156,12 +165,12 @@ struct Parser {
         }
 
         if (i >= source.size() || source[i].type != TokenType::RightParen){
-            return std::unexpected("Ожидалась ')'");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ')' after if condition");
         }
         i++;
-        
+
         if (i >= source.size() || source[i].type != TokenType::LeftBrace){
-            return std::unexpected("Ожидалась '{' после условия if");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '{' after if condition");
         }
         i++; // съели '{'
 
@@ -182,7 +191,7 @@ struct Parser {
                 elseStmt = *elseIf;
             } else {
                 if (i >= source.size() || source[i].type != TokenType::LeftBrace){
-                    return std::unexpected("Ожидалась '{' после else");
+                    return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '{' after else");
                 }
                 i++; // съели '{'
                 auto elseBlock = parseBlock();
@@ -194,7 +203,7 @@ struct Parser {
         }
 
         auto* node = new If();
-        node->line = ln;
+        node->line = ln; node->column = col;
         node->condition = *cond;
         node->thenBranch = *thenBlock;
         node->elseBranch = elseStmt;
@@ -203,11 +212,11 @@ struct Parser {
     }
 
     std::expected<Stmt*, std::string> parseWhile(){
-        int ln = curLine();
+        int ln = curLine(); int col = curColumn();
         i++; // съели 'while'
 
         if (i >= source.size() || source[i].type != TokenType::LeftParen){
-            return std::unexpected("Ожидалась '(' после while");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '(' after 'while'");
         }
         i++;
 
@@ -217,12 +226,12 @@ struct Parser {
         }
 
         if (i >= source.size() || source[i].type != TokenType::RightParen){
-            return std::unexpected("Ожидалась ')'");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ')' after while condition");
         }
         i++;
 
         if (i >= source.size() || source[i].type != TokenType::LeftBrace){
-            return std::unexpected("Ожидалась '{' после условия while");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '{' after while condition");
         }
         i++; // съели '{'
 
@@ -232,7 +241,7 @@ struct Parser {
         }
 
         auto* node = new While();
-        node->line = ln;
+        node->line = ln; node->column = col;
         node->condition = *cond;
         node->body = *body;
 
@@ -240,11 +249,11 @@ struct Parser {
     }
 
     std::expected<Stmt*, std::string> parseReturn(){
-        int ln = curLine();
+        int ln = curLine(); int col = curColumn();
         i++; // съели 'return'
 
         auto *node = new Return();
-        node->line = ln;
+        node->line = ln; node->column = col;
         node->value = nullptr;
 
         if (i < source.size() && source[i].type != TokenType::Separator){
@@ -258,7 +267,7 @@ struct Parser {
 
         if (i >= source.size() || source[i].type != TokenType::Separator){
             delete node;
-            return std::unexpected("Ошибка парсера: ожидался ';' после return");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ';' after return");
         }
         i++;
 
@@ -266,36 +275,36 @@ struct Parser {
     }
 
     std::expected<Stmt*, std::string> parseBreak(){
-        int ln = curLine();
+        int ln = curLine(); int col = curColumn();
         i++; // съели 'break'
 
         if (i >= source.size() || source[i].type != TokenType::Separator){
-            return std::unexpected("Ошибка парсера: ожидался ';' после break");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ';' after break");
         }
         i++;
 
         auto* node = new Break();
-        node->line = ln;
+        node->line = ln; node->column = col;
         return node;
     }
 
     std::expected<Stmt*, std::string> parseContinue(){
-        int ln = curLine();
+        int ln = curLine(); int col = curColumn();
         i++; // съели 'continue'
 
         if (i >= source.size() || source[i].type != TokenType::Separator){
-            return std::unexpected("Ошибка парсера: ожидался ';' после continue");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ';' after continue");
         }
         i++;
 
         auto* node = new Continue();
-        node->line = ln;
+        node->line = ln; node->column = col;
         return node;
     }
 
     std::expected<Stmt*, std::string> parseFuncDecl(){
         auto node = new FuncDecl;
-        node->line = curLine();
+        node->line = curLine(); node->column = curColumn();
 
         {
             auto retType = parseTypeName();
@@ -308,13 +317,13 @@ struct Parser {
 
         if (i >= source.size() || source[i].type != TokenType::Iden){
             delete node;
-            return std::unexpected("Ошибка парсера: ожидалось имя функции");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected function name");
         }
         node->name = source[i++].lexeme;
 
         if (i >= source.size() || source[i].type != TokenType::LeftParen){
             delete node;
-            return std::unexpected("Ошибка парсера: ожидалась '(' после имени функции");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '(' after function name");
         }
         i++; // съели '('
 
@@ -330,7 +339,7 @@ struct Parser {
 
                 if (i >= source.size() || source[i].type != TokenType::Iden){
                     delete node;
-                    return std::unexpected("Ошибка парсера: ожидалось имя параметра");
+                    return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected parameter name");
                 }
                 std::string name = source[i++].lexeme;
 
@@ -346,13 +355,13 @@ struct Parser {
 
         if (i >= source.size() || source[i].type != TokenType::RightParen){
             delete node;
-            return std::unexpected("Ошибка парсера: ожидалась ')' после параметров");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ')' after parameters");
         }
         i++; // съели ')'
 
         if (i >= source.size() || source[i].type != TokenType::LeftBrace){
             delete node;
-            return std::unexpected("Ошибка парсера: ожидался '{' в теле функции");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '{' in function body");
         }
         i++; // съели '{'
 
@@ -367,20 +376,20 @@ struct Parser {
     }
 
     std::expected<Stmt*, std::string> parseStructDecl(){
-        int ln = curLine();
+        int ln = curLine(); int col = curColumn();
         i++; // съели 'struct'
 
         if (i >= source.size() || source[i].type != TokenType::Iden){
-            return std::unexpected("Ошибка парсера: ожидалось имя структуры");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected struct name");
         }
 
         auto *node = new StructDecl();
-        node->line = ln;
+        node->line = ln; node->column = col;
         node->name = source[i++].lexeme;
 
         if (i >= source.size() || source[i].type != TokenType::LeftBrace){
             delete node;
-            return std::unexpected("Ошибка парсера: ожидалась '{' в объявлении структуры");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '{' in struct declaration");
         }
         i++; // съели '{'
 
@@ -394,7 +403,7 @@ struct Parser {
 
             if (i >= source.size() || source[i].type != TokenType::Iden){
                 delete node;
-                return std::unexpected("Ошибка парсера: ожидалось имя поля структуры");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected struct field name");
             }
             std::string fieldName = source[i++].lexeme;
 
@@ -411,7 +420,7 @@ struct Parser {
 
             if (i >= source.size() || source[i].type != TokenType::Separator){
                 delete node;
-                return std::unexpected("Ошибка парсера: ожидался ';' после поля структуры");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ';' after struct field");
             }
             i++; // съели ';'
 
@@ -420,7 +429,7 @@ struct Parser {
 
         if (i >= source.size()){
             delete node;
-            return std::unexpected("Ошибка парсера: ожидалась '}' в объявлении структуры");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '}' in struct declaration");
         }
         i++; // съели '}'
 
@@ -428,19 +437,19 @@ struct Parser {
     }
 
     std::expected<Stmt*, std::string> parseClassDecl(){
-        int ln = curLine();
+        int ln = curLine(); int col = curColumn();
         i++; // съели 'class'
 
         if (i >= source.size() || source[i].type != TokenType::Iden)
-            return std::unexpected("Ошибка парсера: ожидалось имя класса");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected class name");
 
         auto* node = new ClassDecl();
-        node->line = ln;
+        node->line = ln; node->column = col;
         node->name = source[i++].lexeme;
 
         if (i >= source.size() || source[i].type != TokenType::LeftBrace) {
             delete node;
-            return std::unexpected("Ошибка парсера: ожидалась '{' в объявлении класса");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '{' in class declaration");
         }
         i++; // съели '{'
 
@@ -459,18 +468,18 @@ struct Parser {
 
                 if (i >= source.size() || source[i].type != TokenType::LeftParen) {
                     delete node;
-                    return std::unexpected("Ошибка парсера: ожидалась '(' после имени деструктора");
+                    return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '(' after destructor name");
                 }
                 i++; // съели '('
                 if (i >= source.size() || source[i].type != TokenType::RightParen) {
                     delete node;
-                    return std::unexpected("Ошибка парсера: деструктор не принимает параметров");
+                    return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: destructor takes no parameters");
                 }
                 i++; // съели ')'
 
                 if (i >= source.size() || source[i].type != TokenType::LeftBrace) {
                     delete node;
-                    return std::unexpected("Ошибка парсера: ожидалась '{' в теле деструктора");
+                    return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '{' in destructor body");
                 }
                 i++; // съели '{'
 
@@ -481,7 +490,7 @@ struct Parser {
                 }
 
                 auto* dtor = new FuncDecl();
-                dtor->line = ln;
+                dtor->line = ln; dtor->column = col;
                 dtor->returnType = "void";
                 dtor->name = "~" + node->name;
                 dtor->body = dynamic_cast<Block*>(*body);
@@ -504,7 +513,7 @@ struct Parser {
 
                         if (i >= source.size() || source[i].type != TokenType::Iden) {
                             delete node;
-                            return std::unexpected("Ошибка парсера: ожидалось имя параметра конструктора");
+                            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected constructor parameter name");
                         }
                         params.push_back({*paramType, source[i++].lexeme});
 
@@ -516,13 +525,13 @@ struct Parser {
                 }
                 if (i >= source.size() || source[i].type != TokenType::RightParen) {
                     delete node;
-                    return std::unexpected("Ошибка парсера: ожидалась ')' после параметров конструктора");
+                    return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ')' after constructor parameters");
                 }
                 i++; // съели ')'
 
                 if (i >= source.size() || source[i].type != TokenType::LeftBrace) {
                     delete node;
-                    return std::unexpected("Ошибка парсера: ожидалась '{' в теле конструктора");
+                    return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '{' in constructor body");
                 }
                 i++; // съели '{'
 
@@ -530,7 +539,7 @@ struct Parser {
                 if (!body) { delete node; return std::unexpected(body.error()); }
 
                 auto* ctor = new FuncDecl();
-                ctor->line = ln;
+                ctor->line = ln; ctor->column = col;
                 ctor->returnType = "void";
                 ctor->name = node->name;
                 ctor->params = params;
@@ -556,7 +565,7 @@ struct Parser {
 
             if (i >= source.size() || source[i].type != TokenType::Iden) {
                 delete node;
-                return std::unexpected("Ошибка парсера: ожидалось имя поля класса");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected class field name");
             }
             std::string fieldName = source[i++].lexeme;
 
@@ -573,7 +582,7 @@ struct Parser {
 
             if (i >= source.size() || source[i].type != TokenType::Separator) {
                 delete node;
-                return std::unexpected("Ошибка парсера: ожидался ';' после поля класса");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ';' after class field");
             }
             i++; // съели ';'
 
@@ -582,7 +591,7 @@ struct Parser {
 
         if (i >= source.size()) {
             delete node;
-            return std::unexpected("Ошибка парсера: ожидалась '}' в объявлении класса");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '}' in class declaration");
         }
         i++; // съели '}'
 
@@ -590,51 +599,51 @@ struct Parser {
     }
 
     std::expected<Stmt*, std::string> parseTypeAlias(){
-        int ln = curLine();
+        int ln = curLine(); int col = curColumn();
         i++; // съели 'type'
 
         if (i >= source.size() || source[i].type != TokenType::Iden){
-            return std::unexpected("Ошибка парсера: ожидалось имя алиаса");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected alias name");
         }
         std::string alias = source[i++].lexeme;
 
         if (i >= source.size() || source[i].type != TokenType::Equal){
-            return std::unexpected("Ошибка парсера: ожидался '=' в type alias");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '=' in type alias");
         }
         i++; // съели '='
 
         if (i >= source.size() || source[i].type != TokenType::TypeName){
-            return std::unexpected("Ошибка парсера: ожидался тип в type alias");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected type in type alias");
         }
         std::string original = source[i++].lexeme;
 
         if (i >= source.size() || source[i].type != TokenType::Separator){
-            return std::unexpected("Ошибка парсера: ожидался ';' после type alias");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ';' after type alias");
         }
         i++; // съели ';'
 
         auto *node = new TypeAlias();
-        node->line = ln;
+        node->line = ln; node->column = col;
         node->alias = alias;
         node->original = original;
         return node;
     }
 
     std::expected<Stmt*, std::string> parseNamespaceDecl(){
-        int ln = curLine();
+        int ln = curLine(); int col = curColumn();
         i++; // съели 'namespace'
 
         if (i >= source.size() || source[i].type != TokenType::Iden){
-            return std::unexpected("Ошибка парсера: ожидалось имя namespace");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected namespace name");
         }
 
         auto *node = new NamespaceDecl();
-        node->line = ln;
+        node->line = ln; node->column = col;
         node->name = source[i++].lexeme;
 
         if (i >= source.size() || source[i].type != TokenType::LeftBrace){
             delete node;
-            return std::unexpected("Ошибка парсера: ожидалась '{' в namespace");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '{' in namespace");
         }
         i++; // съели '{'
 
@@ -649,7 +658,7 @@ struct Parser {
 
         if (i >= source.size()){
             delete node;
-            return std::unexpected("Ошибка парсера: ожидалась '}' в namespace");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '}' in namespace");
         }
         i++; // съели '}'
 
@@ -676,15 +685,15 @@ struct Parser {
     }
 
     std::expected<Stmt*, std::string> parseImportDecl(){
-        int ln = curLine();
+        int ln = curLine(); int col = curColumn();
         i++; // съели 'import'
 
         if (i >= source.size()){
-            return std::unexpected("Ошибка парсера: ожидался путь после 'import'");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected path after 'import'");
         }
 
         auto *node = new ImportDecl();
-        node->line = ln;
+        node->line = ln; node->column = col;
 
         if (source[i].type == TokenType::Less){
             //  C-импорт: import <header.h>
@@ -697,12 +706,12 @@ struct Parser {
             }
             if (i >= source.size()){
                 delete node;
-                return std::unexpected("Ошибка парсера: ожидался '>' в C-импорте");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '>' in C import");
             }
             i++; // съели '>'
             if (header.empty()){
                 delete node;
-                return std::unexpected("Ошибка парсера: пустой путь в C-импорте");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: empty path in C import");
             }
             node->path = header;
         }
@@ -711,12 +720,12 @@ struct Parser {
         }
         else {
             delete node;
-            return std::unexpected("Ошибка парсера: ожидался путь к модулю после 'import'");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected module path after 'import'");
         }
 
         if (i >= source.size() || source[i].type != TokenType::Separator){
             delete node;
-            return std::unexpected("Ошибка парсера: ожидался ';' после import");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ';' after import");
         }
         i++;
 
@@ -735,7 +744,7 @@ struct Parser {
             if (!inner) return inner;
 
             auto *node = new ExportDecl();
-            node->line = curLine();
+            node->line = curLine(); node->column = curColumn();
             node->decl = *inner;
             return node;
         }
@@ -763,12 +772,12 @@ struct Parser {
         if (i + 1 < source.size() && source[i].type == TokenType::Iden && source[i + 1].type == TokenType::Iden){
             return parseVarOrFuncDecl();
         }
-        return std::unexpected("Ошибка парсера: ожидалось объявление верхнего уровня, получен '" + source[i].lexeme + "'");
+        return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected top-level declaration, got '" + source[i].lexeme + "'");
     }
 
     std::expected<Stmt*, std::string> parseVarDecl(){
         auto node = new VarDecl();
-        node->line = curLine();
+        node->line = curLine(); node->column = curColumn();
 
         if (i < source.size() && source[i].type == TokenType::Const){
             i++;
@@ -794,7 +803,7 @@ struct Parser {
         }
         else {
             delete node;
-            return std::unexpected("Ошибка парсера: ожидался идентификатор в объявлении переменной");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected identifier in variable declaration");
         }
 
         if (i < source.size() && (source[i].type == TokenType::Equal)){
@@ -811,7 +820,7 @@ struct Parser {
 
         if (i >= source.size() || source[i].type != TokenType::Separator){
             delete node;
-            return std::unexpected("Ошибка парсера: ожидался ';' после объявления переменной");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ';' after variable declaration");
         }
         i++;
 
@@ -820,7 +829,7 @@ struct Parser {
 
     std::expected<Block*, std::string> parseBlock(){
         auto block = new Block;
-        block->line = curLine();
+        block->line = curLine(); block->column = curColumn();
 
         while (i < source.size() && (source[i].type != TokenType::RightBrace)){
             auto stmt = parseStatement();
@@ -835,7 +844,7 @@ struct Parser {
         
         if (i >= source.size()){
             delete block;
-            return std::unexpected("Expected '}'");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '}'");
         }
         i++;
 
@@ -862,7 +871,7 @@ struct Parser {
             }
 
             auto *node = new Binary();
-            node->line = result->line;
+            node->line = result->line; node->column = result->column;
             node->op = Operand::Or;
             node->left = result;
             node->right = *right;
@@ -888,7 +897,7 @@ struct Parser {
             }
 
             auto *node = new Binary();
-            node->line = result->line;
+            node->line = result->line; node->column = result->column;
             node->op = Operand::And;
             node->left = result;
             node->right = *right;
@@ -919,7 +928,7 @@ struct Parser {
             }
 
             auto *node = new Binary();
-            node->line = result->line;
+            node->line = result->line; node->column = result->column;
             node->op = op;
             node->left = result;
             node->right = *right;
@@ -961,7 +970,7 @@ struct Parser {
             }
 
             auto *node = new Binary();
-            node->line = result->line;
+            node->line = result->line; node->column = result->column;
             node->op = op;
             node->left = result;
             node->right = *right;
@@ -992,7 +1001,7 @@ struct Parser {
             }
             
             auto *node = new Binary();
-            node->line = result->line;
+            node->line = result->line; node->column = result->column;
             node->op = op;
             node->left = result;
             node->right = *right;
@@ -1023,7 +1032,7 @@ struct Parser {
             }
 
             auto *node = new Binary();
-            node->line = result->line;
+            node->line = result->line; node->column = result->column;
             node->op = op;
             node->left = result;
             node->right = *right;
@@ -1035,7 +1044,7 @@ struct Parser {
     std::expected<Expr*, std::string> parseUnary(){
         if(i < source.size()){
             if (source[i].type == TokenType::Minus){
-                int ln = curLine();
+                int ln = curLine(); int col = curColumn();
                 i++;
                 auto right = parseUnary();
 
@@ -1044,7 +1053,7 @@ struct Parser {
                 }
 
                 auto *node = new Unary();
-                node->line = ln;
+                node->line = ln; node->column = col;
                 node->op = Operand::UnaryMinus;
                 node->operand = *right;
                 return node;
@@ -1054,7 +1063,7 @@ struct Parser {
                 return parseUnary();
             }
             if (source[i].type == TokenType::Not){
-                int ln = curLine();
+                int ln = curLine(); int col = curColumn();
                 i++;
                 auto right = parseUnary();
 
@@ -1063,7 +1072,7 @@ struct Parser {
                 }
 
                 auto *node = new Unary();
-                node->line = ln;
+                node->line = ln; node->column = col;
                 node->op = Operand::Not;
                 node->operand = *right;
                 return node;
@@ -1085,11 +1094,11 @@ struct Parser {
                 i++; // съели '.'
 
                 if (i >= source.size() || source[i].type != TokenType::Iden){
-                    return std::unexpected("Ошибка парсера: ожидалось имя поля после '.'");
+                    return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected field name after '.'");
                 }
 
                 auto *node = new FieldAccess();
-                node->line = result->line;
+                node->line = result->line; node->column = result->column;
                 node->object = result;
                 node->field = source[i++].lexeme;
                 result = node;
@@ -1104,12 +1113,12 @@ struct Parser {
                 }
 
                 if (i >= source.size() || source[i].type != TokenType::RightBracket){
-                    return std::unexpected("Ошибка парсера: ожидалась ']'");
+                    return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ']' after index");
                 }
                 i++; // съели ']'
 
                 auto *node = new ArrayAccess();
-                node->line = result->line;
+                node->line = result->line; node->column = result->column;
                 node->object = result;
                 node->index = *index;
                 result = node;
@@ -1119,7 +1128,7 @@ struct Parser {
                 i++; // съели '('
 
                 auto *node = new FuncCall();
-                node->line = result->line;
+                node->line = result->line; node->column = result->column;
                 node->callee = result;
 
                 // парсим аргументы: expr, expr, ...
@@ -1142,7 +1151,7 @@ struct Parser {
 
                 if (i >= source.size() || source[i].type != TokenType::RightParen){
                     delete node;
-                    return std::unexpected("Ошибка парсера: ожидалась ')' после аргументов вызова");
+                    return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ')' after call arguments");
                 }
                 i++; // съели ')'
 
@@ -1154,7 +1163,7 @@ struct Parser {
                 i++; // съели '++'
 
                 auto *node = new Unary();
-                node->line = result->line;
+                node->line = result->line; node->column = result->column;
                 node->op = Operand::Increment;
                 node->operand = result;
                 result = node;
@@ -1164,7 +1173,7 @@ struct Parser {
                 i++; // съели '--'
 
                 auto *node = new Unary();
-                node->line = result->line;
+                node->line = result->line; node->column = result->column;
                 node->op = Operand::Decrement;
                 node->operand = result;
                 result = node;
@@ -1180,22 +1189,28 @@ struct Parser {
 
     std::expected<Expr*, std::string> parsePrimary() {
         if (i >= source.size()){
-            return std::unexpected("Ошибка парсера: неожиданный конец файла");
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: unexpected end of file");
         }
 
         // числовой литерал
         if (source[i].type == TokenType::Number){
             auto *node = new Number();
-            node->line = curLine();
+            node->line = curLine(); node->column = curColumn();
             node->isFloat = (source[i].subType == SubType::Float);
-            node->value = std::stod(source[i++].lexeme);
+            try {
+                node->value = std::stod(source[i].lexeme);
+            } catch (const std::exception&) {
+                delete node;
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: invalid numeric literal '" + source[i].lexeme + "'");
+            }
+            ++i;
             return node;
         }
 
         // строковый литерал
         if (source[i].type == TokenType::StringLit){
             auto *node = new String();
-            node->line = curLine();
+            node->line = curLine(); node->column = curColumn();
             node->value = source[i++].lexeme;
             return node;
         }
@@ -1203,33 +1218,33 @@ struct Parser {
         // булев литерал
         if (source[i].type == TokenType::BoolLit){
             auto *node = new Bool();
-            node->line = curLine();
+            node->line = curLine(); node->column = curColumn();
             node->value = (source[i++].lexeme == "true");
             return node;
         }
 
         // cast<type>(expr)
         if (source[i].type == TokenType::Cast){
-            int ln = curLine();
+            int ln = curLine(); int col = curColumn();
             i++; // съели 'cast'
 
             if (i >= source.size() || source[i].type != TokenType::Less){
-                return std::unexpected("Ошибка парсера: ожидалась '<' после cast");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '<' after cast");
             }
             i++; // съели '<'
 
             if (i >= source.size() || source[i].type != TokenType::TypeName){
-                return std::unexpected("Ошибка парсера: ожидался тип в cast<>");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected type in cast<>");
             }
             std::string targetType = source[i++].lexeme;
 
             if (i >= source.size() || source[i].type != TokenType::Greater){
-                return std::unexpected("Ошибка парсера: ожидалась '>' в cast<>");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '>' in cast<>");
             }
             i++; // съели '>'
 
             if (i >= source.size() || source[i].type != TokenType::LeftParen){
-                return std::unexpected("Ошибка парсера: ожидалась '(' после cast<type>");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '(' after cast<type>");
             }
             i++; // съели '('
 
@@ -1239,12 +1254,12 @@ struct Parser {
             }
 
             if (i >= source.size() || source[i].type != TokenType::RightParen){
-                return std::unexpected("Ошибка парсера: ожидалась ')' в cast");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ')' in cast");
             }
             i++; // съели ')'
 
             auto *node = new CastExpr();
-            node->line = ln;
+            node->line = ln; node->column = col;
             node->targetType = targetType;
             node->value = *expr;
             return node;
@@ -1252,18 +1267,18 @@ struct Parser {
 
         // new ClassName(args...)
         if (source[i].type == TokenType::New) {
-            int ln = curLine();
+            int ln = curLine(); int col = curColumn();
             i++; // съели 'new'
 
             if (i >= source.size() || source[i].type != TokenType::Iden)
-                return std::unexpected("Ошибка парсера: ожидалось имя класса после 'new'");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected class name after 'new'");
             auto* node = new NewExpr();
-            node->line = ln;
+            node->line = ln; node->column = col;
             node->className = source[i++].lexeme;
 
             if (i >= source.size() || source[i].type != TokenType::LeftParen) {
                 delete node;
-                return std::unexpected("Ошибка парсера: ожидалась '(' после имени класса в new");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '(' after class name in new");
             }
             i++; // съели '('
 
@@ -1281,7 +1296,7 @@ struct Parser {
 
             if (i >= source.size() || source[i].type != TokenType::RightParen) {
                 delete node;
-                return std::unexpected("Ошибка парсера: ожидалась ')' в new");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ')' in new");
             }
             i++; // съели ')'
             return node;
@@ -1289,7 +1304,7 @@ struct Parser {
 
         // идентификатор, namespace access, struct literal
         if (source[i].type == TokenType::Iden){
-            int ln = curLine();
+            int ln = curLine(); int col = curColumn();
             std::string name = source[i++].lexeme;
 
             // iden "::" iden — доступ к namespace
@@ -1297,11 +1312,11 @@ struct Parser {
                 i++; // съели '::'
 
                 if (i >= source.size() || source[i].type != TokenType::Iden){
-                    return std::unexpected("Ошибка парсера: ожидался идентификатор после '::'");
+                    return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected identifier after '::'");
                 }
 
                 auto *node = new NamespaceAccess();
-                node->line = ln;
+                node->line = ln; node->column = col;
                 node->nameSpace = name;
                 node->member = source[i++].lexeme;
                 return node;
@@ -1312,20 +1327,20 @@ struct Parser {
                 i++; // съели '{'
 
                 auto *node = new StructLiteral();
-                node->line = ln;
+                node->line = ln; node->column = col;
                 node->name = name;
 
                 if (i < source.size() && source[i].type != TokenType::RightBrace){
                     while (true){
                         if (i >= source.size() || source[i].type != TokenType::Iden){
                             delete node;
-                            return std::unexpected("Ошибка парсера: ожидалось имя поля в литерале структуры");
+                            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected field name in struct literal");
                         }
                         std::string fieldName = source[i++].lexeme;
 
                         if (i >= source.size() || source[i].type != TokenType::Colon){
                             delete node;
-                            return std::unexpected("Ошибка парсера: ожидался ':' после имени поля");
+                            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ':' after field name");
                         }
                         i++; // съели ':'
 
@@ -1347,7 +1362,7 @@ struct Parser {
 
                 if (i >= source.size() || source[i].type != TokenType::RightBrace){
                     delete node;
-                    return std::unexpected("Ошибка парсера: ожидалась '}' в литерале структуры");
+                    return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '}' in struct literal");
                 }
                 i++; // съели '}'
 
@@ -1356,18 +1371,18 @@ struct Parser {
 
             // просто идентификатор
             auto *node = new Identifier();
-            node->line = ln;
+            node->line = ln; node->column = col;
             node->name = name;
             return node;
         }
 
         // "[" expr_list "]" — литерал массива
         if (source[i].type == TokenType::LeftBracket){
-            int ln = curLine();
+            int ln = curLine(); int col = curColumn();
             i++; // съели '['
 
             auto *node = new ArrayLiteral();
-            node->line = ln;
+            node->line = ln; node->column = col;
 
             if (i < source.size() && source[i].type != TokenType::RightBracket){
                 while (true){
@@ -1388,7 +1403,7 @@ struct Parser {
 
             if (i >= source.size() || source[i].type != TokenType::RightBracket){
                 delete node;
-                return std::unexpected("Ошибка парсера: ожидалась ']'");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ']' in array literal");
             }
             i++; // съели ']'
 
@@ -1405,18 +1420,18 @@ struct Parser {
             }
 
             if (i >= source.size() || source[i].type != TokenType::RightParen){
-                return std::unexpected("Ошибка парсера: ожидалась ')'");
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ')'");
             }
             i++; // съели ')'
             return *node;
         }
 
-        return std::unexpected("Ошибка парсера: неожиданный токен '" + source[i].lexeme + "'");
+        return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: unexpected token '" + source[i].lexeme + "'");
     }
 };
 
-std::expected<std::vector<Stmt*>, std::string> parse(const std::vector<Token>& source){
-    Parser head(source);
+std::expected<std::vector<Stmt*>, std::string> parse(const std::vector<Token>& source, const std::string& filePath){
+    Parser head(source, filePath);
     std::vector<Stmt*> declarations;
 
     while (head.i < source.size() && source[head.i].type != TokenType::End) {

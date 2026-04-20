@@ -5,6 +5,9 @@ str2: db `You`, 0
 str3: db `Him`, 0
 str4: db `Hello`, 0
 str5: db ` World `, 0
+str6: db `true\n`, 0
+str7: db `true`, 0
+str8: db `false`, 0
 
 section .bss
 __default_instance_MyClass: resb 32
@@ -57,10 +60,33 @@ MyClass_Add:
     mov rdi, 16
     call lang_alloc
     push rax
+    mov qword [rax + 0], 0
+    mov qword [rax + 8], 0
     pop rax
     mov rbx, [rbp-8]
     mov [rbx + 0], rax
 .end_of_MyClass_Add:
+    mov rsp, rbp
+    pop rbp
+    ret
+
+global MyClass_GetPos
+MyClass_GetPos:
+    push rbp
+    mov rbp, rsp
+    sub rsp, 16
+    mov [rbp-8], rdi
+    mov [rbp-16], rsi
+    mov rax, [rbp-8]
+    mov rax, [rax + 8]
+    push rax
+    mov rax, [rbp-16]
+    mov rbx, rax
+    pop rax
+    mov rax, [rax + rbx*8]
+    mov rax, [rax+0]
+    jmp .end_of_MyClass_GetPos
+.end_of_MyClass_GetPos:
     mov rsp, rbp
     pop rbp
     ret
@@ -121,10 +147,12 @@ global main
 main:
     push rbp
     mov rbp, rsp
-    sub rsp, 64
+    sub rsp, 80
     mov rdi, 16
     call lang_alloc
     push rax
+    mov qword [rax + 0], 0
+    mov qword [rax + 8], 0
     pop rax
     mov [rel __default_instance_MyClass + 0], rax
     mov rdi, 32
@@ -142,6 +170,18 @@ main:
     mov rax, [rel __default_instance_MyClass + 24]
     mov rbx, [rsp]
     mov [rbx + 24], rax
+    mov rdi, 16
+    call lang_alloc
+    push rax
+    mov qword [rax + 0], 0
+    mov qword [rax + 8], 0
+    pop rax
+    mov rbx, [rsp]
+    mov [rbx + 0], rax
+    mov rbx, [rsp]
+    mov qword [rbx + 8], 0
+    mov qword [rbx + 16], 0
+    mov qword [rbx + 24], 0
     pop rax
     mov [rbp-8], rax
     mov rax, [rbp-8]
@@ -266,9 +306,115 @@ main:
     mov rdi, rax
     call print_string
     call print_newline
+    mov rax, 4617315517961601024
+    push rax
+    movsd xmm0, [rsp]
+    add rsp, 8
+    call test
+    call lang_input
+    mov [rbp-72], rax
+    mov rax, [rbp-72]
+    mov rdi, rax
+    call print_string
+    call print_newline
+    mov rax, [rbp-8]
+    push rax
+    mov rax, 1
+    push rax
+    pop rsi
+    pop rdi
+    call MyClass_GetPos
+    push rax
+    pop rdi
+    call testClass
+    mov rdi, rax
+    call print_bool
+    call print_newline
     mov rax, 0
     jmp .end_of_main
 .end_of_main:
+    mov rsp, rbp
+    pop rbp
+    ret
+
+global test
+test:
+    push rbp
+    mov rbp, rsp
+    sub rsp, 32
+    movsd [rbp-8], xmm0
+    lea rax, [rel str4]
+    mov [rbp-16], rax
+    lea rax, [rel str4]
+    mov [rbp-24], rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, [rbp-24]
+    mov rbx, rax
+    pop rax
+    cmp rax, rbx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .endif6
+    lea rax, [rel str6]
+    mov rdi, rax
+    call print_string
+    call print_newline
+.endif6:
+    call lang_input
+    mov [rbp-16], rax
+    call lang_input
+    mov [rbp-24], rax
+    mov rax, [rbp-16]
+    push rax
+    mov rax, [rbp-24]
+    mov rbx, rax
+    pop rax
+    cmp rax, rbx
+    sete al
+    movzx rax, al
+    test rax, rax
+    jz .else7
+    lea rax, [rel str7]
+    mov rdi, rax
+    call print_string
+    call print_newline
+    jmp .endif8
+.else7:
+    lea rax, [rel str8]
+    mov rdi, rax
+    call print_string
+    call print_newline
+.endif8:
+    jmp .end_of_test
+.end_of_test:
+    mov rsp, rbp
+    pop rbp
+    ret
+
+global testClass
+testClass:
+    push rbp
+    mov rbp, rsp
+    sub rsp, 16
+    mov [rbp-8], rdi
+    mov rax, [rbp-8]
+    push rax
+    mov rax, 0
+    mov rbx, rax
+    pop rax
+    cmp rax, rbx
+    setne al
+    movzx rax, al
+    test rax, rax
+    jz .endif10
+    mov rax, 1
+    jmp .end_of_testClass
+.endif10:
+    mov rax, 0
+    jmp .end_of_testClass
+.end_of_testClass:
     mov rsp, rbp
     pop rbp
     ret

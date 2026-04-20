@@ -7,6 +7,7 @@
 
 struct ASTNode{
     int line = 0;       // Номер строки в исходнике (из токена)
+    int column = 0;     // Номер столбца (из токена)
     virtual ~ASTNode() = default;
 };
 
@@ -207,4 +208,4 @@ struct Program : ASTNode{
 
 // Функции
 
-std::expected<std::vector<Stmt*>, std::string> parse(const std::vector<Token>& source);
+std::expected<std::vector<Stmt*>, std::string> parse(const std::vector<Token>& source, const std::string& filePath = "<source>");

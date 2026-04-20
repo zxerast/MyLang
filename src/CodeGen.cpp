@@ -18,11 +18,11 @@ std::string CodeGen::internString(const std::string& str) { //  Заполнен
     rodata << label << ": db `";    //  Любая строка это double-word
     for (unsigned char c : str) {
         if (c == '`' || c == '\\') rodata << '\\' << c;
-        else if (c == '\n')              rodata << "\\n";
-        else if (c == '\r')              rodata << "\\r";
-        else if (c == '\t')              rodata << "\\t";
-        else if (c < ' ' || c > '~')     rodata << "`, " << (int)c << ", `";
-        else                             rodata << c;
+        else if (c == '\n') rodata << "\\n";
+        else if (c == '\r') rodata << "\\r";
+        else if (c == '\t') rodata << "\\t";
+        else if (c < ' ' || c > '~') rodata << "`, " << (int)c << ", `";
+        else rodata << c;
     }
     rodata << "`, 0\n";
     return label;
@@ -83,6 +83,41 @@ const LocalVar* CodeGen::findLocal(const std::string& name) const {
     return &it->second;
 }
 
+//  Инициализирует слот глобалки в прологе main. Логика зеркалит локальный VarDecl,
+//  но пишет в .bss-лейбл __global_<name> вместо стэковой локалки.
+void CodeGen::compileGlobalInit(VarDecl* var) {
+    bool declaredDyn = var->typeName.size() >= 2 && var->typeName.substr(var->typeName.size() - 2) == "[]";
+    std::string slot = "__global_" + var->name;
+
+    if (declaredDyn) {
+        if (auto* arrLit = dynamic_cast<ArrayLiteral*>(var->init)) {    //  Литерал массива: аллоцируем буфер, пишем qword'ами
+            int n = (int)arrLit->elements.size();
+            text << "    mov rdi, " << (n * 8) << "\n";
+            text << "    call lang_alloc\n";
+            text << "    mov [rel " << slot << "], rax\n";                  //  ptr
+            text << "    mov qword [rel " << slot << " + 8], " << n << "\n";   //  len
+            text << "    mov qword [rel " << slot << " + 16], " << n << "\n"; //  cap
+            for (int i = 0; i < n; ++i) {
+                text << "    push qword [rel " << slot << "]\n";
+                compileExpr(arrLit->elements[i]);
+                text << "    pop rbx\n";
+                text << "    mov [rbx + " << (i * 8) << "], rax\n";
+            }
+            return;
+        }
+        if (!var->init) {   //  Без инициализатора — пустой DynArray
+            text << "    mov qword [rel " << slot << "], 0\n";
+            text << "    mov qword [rel " << slot << " + 8], 0\n";
+            text << "    mov qword [rel " << slot << " + 16], 0\n";
+            return;
+        }
+    }
+    if (var->init) {
+        compileExpr(var->init);
+        text << "    mov [rel " << slot << "], rax\n";
+    }
+}
+
 //  Достаточный тип для выделения слота параметра: распознаём только DynArray (T[]).
 //  Примитивы и struct/class → nullptr; для них sizeOfType(nullptr) == 8, что корректно.
 std::shared_ptr<Type> CodeGen::typeFromName(const std::string& name) const {
@@ -102,7 +137,7 @@ void CodeGen::collectLayout(const std::string& name, const std::vector<StructFie
         layout[field.name] = offset;
         bool isDynArray = (field.typeName.size() >= 2 && field.typeName.substr(field.typeName.size() - 2) == "[]");
         if (isDynArray) offset += 24;
-        else            offset += 8;
+        else offset += 8;
     }
     structSizes[name] = offset;
 }
@@ -130,6 +165,82 @@ void CodeGen::collectDecls(Stmt* decl) {
     else if (auto* ns  = dynamic_cast<NamespaceDecl*>(decl)) {
         for (auto* stmt : ns->decls) collectDecls(stmt);
     }
+    else if (auto* var = dynamic_cast<VarDecl*>(decl)) {    //  Глобальная переменная: регистрируем имя и её тип
+        if (!globals.count(var->name)) {
+            std::shared_ptr<Type> type = nullptr;
+            bool declaredDyn = var->typeName.size() >= 2 && var->typeName.substr(var->typeName.size() - 2) == "[]";
+            if (declaredDyn) {
+                auto arrType = std::make_shared<Type>();
+                arrType->kind = TypeKind::DynArray;
+                type = arrType;
+            }
+            else if (var->init) {
+                type = var->init->resolvedType;
+            }
+            globals[var->name] = type;
+            globalVars.push_back(var);
+        }
+    }
+}
+
+bool CodeGen::isGlobal(const std::string& name) const {
+    return globals.count(name) > 0;
+}
+
+//  Вычисляет адрес DynArray-источника в регистр reg. Возвращает true при успехе.
+//  Поддерживает: локальная DynArray; поле текущего класса; ClassName.field (дефолтный экземпляр); глобальная DynArray.
+bool CodeGen::emitDynArrayAddr(Expr* e, const char* reg) {
+    if (auto* id = dynamic_cast<Identifier*>(e)) {
+        const LocalVar* lv = findLocal(id->name);
+        if (lv) {
+            text << "    lea " << reg << ", [rbp" << lv->offset << "]\n";
+            return true;
+        }
+        if (currentClass) {
+            auto& layout = structLayouts[currentClass->name];
+            if (layout.count(id->name)) {
+                const LocalVar* selfVar = findLocal("self");
+                int off = layout[id->name];
+                text << "    mov " << reg << ", [rbp" << selfVar->offset << "]\n";
+                if (off != 0) text << "    add " << reg << ", " << off << "\n";
+                return true;
+            }
+        }
+        if (isGlobal(id->name)) {
+            text << "    lea " << reg << ", [rel __global_" << id->name << "]\n";
+            return true;
+        }
+    }
+    if (auto* fa = dynamic_cast<FieldAccess*>(e)) {
+        //  ClassName.field — адрес внутри дефолтного экземпляра
+        if (auto* obj = dynamic_cast<Identifier*>(fa->object)) {
+            if (classDecls.count(obj->name)) {
+                auto& layout = structLayouts[obj->name];
+                int off = 0;
+                if (layout.count(fa->field)) off = layout[fa->field];
+                text << "    lea " << reg << ", [rel __default_instance_" << obj->name << " + " << off << "]\n";
+                return true;
+            }
+        }
+        //  instance.field — экземпляр (не имя класса): compileExpr кладёт ptr в rax,
+        //  затем reg = rax + field_offset.
+        if (fa->object && fa->object->resolvedType) {
+            auto type = fa->object->resolvedType;
+            auto it = structLayouts.find(type->name);
+            if (it != structLayouts.end() && it->second.count(fa->field)) {
+                int off = it->second[fa->field];
+                compileExpr(fa->object);
+                if (std::string(reg) == "rax") {
+                    if (off != 0) text << "    add rax, " << off << "\n";
+                }
+                else {
+                    text << "    lea " << reg << ", [rax + " << off << "]\n";
+                }
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 void CodeGen::compileMethod(FuncDecl* f, const std::string& labelName) {
@@ -182,7 +293,8 @@ void CodeGen::compileDecl(Stmt* decl, const std::string& classPrefix) {
         for (auto* stmt : ns->decls) compileDecl(stmt, prefix);    //  Функции из namespace помечаем префиксом чтобы различить
         return;
     }
-    //  StructDecl / TypeAlias / ImportDecl на верхнем уровне — ничего не генерируют
+    //  StructDecl / TypeAlias / ImportDecl / VarDecl на верхнем уровне — ничего не генерируют
+    //  (глобалки инициализируются из пролога main через compileGlobalInit).
 }
 
 //  Точка входа
@@ -204,6 +316,10 @@ std::expected<void, std::string> CodeGen::generate(Program* program, const std::
     text << "extern lang_pop\n";
     text << "extern lang_strcat\n\n";
 
+    //  Сообщения рантайма (формирует lang_panic как "runtime error: <msg> at line <N>")
+    rodata << "__rt_div_zero: db \"division by zero\", 0\n";
+    rodata << "__rt_bounds:   db \"array index out of bounds\", 0\n";
+
     //  Первый проход — ставим смещение в struct/class
     for (auto* decl : program->decls) {
         collectDecls(decl);
@@ -222,9 +338,17 @@ std::expected<void, std::string> CodeGen::generate(Program* program, const std::
     //  Для классов: .bss-слот под «дефолтный экземпляр» (хранит текущее значение полей,
     //  позволяет вызвать MyClass.method() и использовать MyClass.field = x).
     for (auto* cd : classDeclsOrdered) {
-        int size = structSizes.count(cd->name) ? structSizes[cd->name] : 0;
+        int size = 0;
+        if (structSizes.count(cd->name)) size = structSizes[cd->name];
         if (size <= 0) size = 8;
         bss << "__default_instance_" << cd->name << ": resb " << size << "\n";
+    }
+
+    //  .bss-слоты под глобальные переменные: DynArray — 24 байта (ptr/len/cap), остальное — 8.
+    for (auto* var : globalVars) {
+        int size = sizeOfType(globals[var->name]);
+        if (size < 8) size = 8;
+        bss << "__global_" << var->name << ": resb " << size << "\n";
     }
 
     //  Компилируем каждую функцию верхнего уровня (включая методы классов)
@@ -263,6 +387,7 @@ std::expected<void, std::string> CodeGen::generate(Program* program, const std::
 
 void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
     locals.clear();     //  Чистим текущие локалки прошлых функций
+    classLocals.clear();
     currentFrameSize = 0;   //  Байт на функцию
     currentEndLabel = ".end_of_" + func->name;  //  Имя метки переводящей в конец, для return
 
@@ -278,7 +403,7 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
     }
 
     for (auto& param : func->params) {  //  Выделяем память для параметров (DynArray получит 24 байта)
-        allocLocal(param.name, typeFromName(param.typeName));
+        allocLocal(param.name, typeFromName(param.typeName));   //  Здесь каждый параметр будет получать 8 байтов на стэке для выравнивания
     }
 
     int paramBytes = currentFrameSize;
@@ -314,7 +439,7 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
             int stackOffset1 = 16 + stackIdx++ * 8;
             int stackOffset2 = 16 + stackIdx++ * 8;
             text << "    mov rax, [rbp+" << stackOffset0 << "]\n";
-            text << "    mov [rbp" << localVar->offset        << "], rax\n";
+            text << "    mov [rbp" << localVar->offset << "], rax\n";
             text << "    mov rax, [rbp+" << stackOffset1 << "]\n";
             text << "    mov [rbp" << (localVar->offset + 8)  << "], rax\n";
             text << "    mov rax, [rbp+" << stackOffset2 << "]\n";
@@ -349,16 +474,37 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
             auto& layout = structLayouts[cd->name];
             for (auto& field : cd->fields) {
                 if (!field.defaultValue) continue;
-                int off = layout.count(field.name) ? layout[field.name] : 0;
+                int off = 0;
+                if (layout.count(field.name)) off = layout[field.name];
                 compileExpr(field.defaultValue);
                 text << "    mov [rel __default_instance_" << cd->name << " + " << off << "], rax\n";
             }
+        }
+        //  Инициализация глобальных переменных — после дефолтов, чтобы init мог ссылаться на StructName/ClassName.
+        for (auto* var : globalVars) {
+            compileGlobalInit(var);
         }
     }
 
     compileStmt(func->body);    //  Тело функции
 
     text << currentEndLabel << ":\n";   //  Конец функции
+    //  Scope-exit: вызываем деструкторы для классовых локалок с ненулевым указателем.
+    //  rax — возвращаемое значение, сохраняем его в aligned-слоте, чтобы call'ы не клобберили.
+    if (!classLocals.empty()) {
+        text << "    sub rsp, 16\n";
+        text << "    mov [rsp], rax\n";
+        for (auto i = classLocals.rbegin(); i != classLocals.rend(); ++i) {
+            std::string lbl = newLabel("no_dtor");
+            text << "    mov rdi, [rbp" << i->first << "]\n";
+            text << "    test rdi, rdi\n";
+            text << "    jz " << lbl << "\n";
+            text << "    call " << i->second << "_dtor\n";
+            text << lbl << ":\n";
+        }
+        text << "    mov rax, [rsp]\n";
+        text << "    add rsp, 16\n";
+    }
     text << "    mov rsp, rbp\n";
     text << "    pop rbp\n";
     text << "    ret\n";
@@ -420,6 +566,12 @@ void CodeGen::compileStmt(Stmt* stmt) {
         }
 
         int off = allocLocal(var->name, type);
+        //  Класс-типа локалку регистрируем для scope-exit дтор-вызова и зануляем слот,
+        //  чтобы без-инициализатора/до-присваивания сравнение `test rdi, rdi` пропускало вызов.
+        if (type && type->kind == TypeKind::Class && classDecls.count(type->name) && classDecls[type->name]->destructor) {
+            text << "    mov qword [rbp" << off << "], 0\n";
+            classLocals.push_back({off, type->name});
+        }
         //  DynArray, инициализированный литералом массива: аллоцируем буфер, пишем qword'ами, заполняем ptr/len/cap.
         if (declaredDyn) {
             if (auto* arrLit = dynamic_cast<ArrayLiteral*>(var->init)) {
@@ -437,7 +589,7 @@ void CodeGen::compileStmt(Stmt* stmt) {
                 }
                 return;
             }
-            //  Прочие инициализаторы DynArray (identifier, call, пусто) — в следующих фазах.
+            
             if (!var->init) {
                 text << "    mov qword [rbp" << off << "], 0\n";
                 text << "    mov qword [rbp" << (off + 8) << "], 0\n";
@@ -466,12 +618,65 @@ void CodeGen::compileStmt(Stmt* stmt) {
                 }
             }
             const LocalVar* localVar = findLocal(id->name);
-            if (!localVar) return;
-            compileExpr(assign->value);
-            text << "    mov [rbp" << localVar->offset << "], rax\n";   //  Закидываем в локалку по сдвигу
+            if (localVar) {
+                compileExpr(assign->value);
+                text << "    mov [rbp" << localVar->offset << "], rax\n";   //  Закидываем в локалку по сдвигу
+                return;
+            }
+            if (isGlobal(id->name)) {   //  Глобалка: пишем в .bss-слот
+                compileExpr(assign->value);
+                text << "    mov [rel __global_" << id->name << "], rax\n";
+                return;
+            }
             return;
         }
         if (auto* fieldAccess = dynamic_cast<FieldAccess*>(assign->target)) {
+            //  Поле — DynArray: нужно писать 3 qword'а (ptr/len/cap), а не один.
+            //  Исключение — StructName.field: слот `__default_<Struct>_<field>` всего 8 байт,
+            //  корректно хранить туда DynArray нельзя, падаем на старое поведение (один qword).
+            auto fieldType = fieldAccess->resolvedType;
+            bool isDynArr = fieldType && fieldType->kind == TypeKind::DynArray;
+            bool structDefault = false;
+            if (auto* id = dynamic_cast<Identifier*>(fieldAccess->object)) {
+                if (structDecls.count(id->name)) structDefault = true;
+            }
+            if (isDynArr && !structDefault) {
+                if (auto* arrLit = dynamic_cast<ArrayLiteral*>(assign->value)) {
+                    int n = (int)arrLit->elements.size();
+                    emitDynArrayAddr(fieldAccess, "rdi");        //  rdi = адрес 24-байтового слота
+                    text << "    push rdi\n";
+                    text << "    mov rdi, " << (n * 8) << "\n";
+                    text << "    call lang_alloc\n";
+                    text << "    pop rbx\n";
+                    text << "    mov [rbx], rax\n";
+                    text << "    mov qword [rbx + 8], " << n << "\n";
+                    text << "    mov qword [rbx + 16], " << n << "\n";
+                    for (int i = 0; i < n; ++i) {
+                        text << "    push rbx\n";
+                        compileExpr(arrLit->elements[i]);
+                        text << "    pop rbx\n";
+                        text << "    mov rcx, [rbx]\n";
+                        text << "    mov [rcx + " << (i * 8) << "], rax\n";
+                    }
+                    return;
+                }
+                //  Иначе — источник должен быть DynArray-местом (локалка / поле / глобалка):
+                //  копируем 24 байта из источника в приёмник.
+                if (emitDynArrayAddr(assign->value, "rsi")) {
+                    text << "    push rsi\n";
+                    emitDynArrayAddr(fieldAccess, "rdi");
+                    text << "    pop rsi\n";
+                    text << "    mov rax, [rsi]\n";
+                    text << "    mov [rdi], rax\n";
+                    text << "    mov rax, [rsi + 8]\n";
+                    text << "    mov [rdi + 8], rax\n";
+                    text << "    mov rax, [rsi + 16]\n";
+                    text << "    mov [rdi + 16], rax\n";
+                    return;
+                }
+                //  Источник не опознан — падаем на старое поведение ниже.
+            }
+
             //  Переопределение default-значения структуры: `Point.x = 4;`.
             //  Если object — это идентификатор, совпадающий с именем структуры, пишем в слот.
             if (auto* id = dynamic_cast<Identifier*>(fieldAccess->object)) {
@@ -505,7 +710,8 @@ void CodeGen::compileStmt(Stmt* stmt) {
             text << "    pop rbx\n";                         //  индекс
             text << "    pop rcx\n";                         //  база
 
-            auto objType = aa->object ? aa->object->resolvedType : nullptr;
+            std::shared_ptr<Type> objType = nullptr;
+            if (aa->object) objType = aa->object->resolvedType;
             int sz = 8;
             if (objType && objType->kind == TypeKind::Array) {
                 sz = sizeOfType(objType->elementType);
@@ -520,9 +726,36 @@ void CodeGen::compileStmt(Stmt* stmt) {
         return;
     }
     if (auto* ds = dynamic_cast<DeleteStmt*>(stmt)) {
+        //  Если удаляемый указатель — класс с деструктором, зовём <Class>_dtor до lang_free.
+        std::string dtorClass;
+        auto t = ds->value ? ds->value->resolvedType : nullptr;
+        if (t && t->kind == TypeKind::Class && classDecls.count(t->name) && classDecls[t->name]->destructor) {
+            dtorClass = t->name;
+        }
         compileExpr(ds->value);
-        text << "    mov rdi, rax\n";
+        if (!dtorClass.empty()) {
+            //  Сохраняем ptr в aligned-слоте: sub rsp,16; mov [rsp], rax — rsp%16==0 перед call.
+            text << "    sub rsp, 16\n";
+            text << "    mov [rsp], rax\n";
+            text << "    mov rdi, rax\n";
+            text << "    call " << dtorClass << "_dtor\n";
+            text << "    mov rdi, [rsp]\n";
+            text << "    add rsp, 16\n";
+        }
+        else {
+            text << "    mov rdi, rax\n";
+        }
         text << "    call lang_free\n";
+        //  Обнуляем исходную переменную, чтобы scope-exit дтор не сработал повторно.
+        if (auto* id = dynamic_cast<Identifier*>(ds->value)) {
+            const LocalVar* lv = findLocal(id->name);
+            if (lv) {
+                text << "    mov qword [rbp" << lv->offset << "], 0\n";
+            }
+            else if (isGlobal(id->name)) {
+                text << "    mov qword [rel __global_" << id->name << "], 0\n";
+            }
+        }
         return;
     }
     if (auto* es = dynamic_cast<ExprStmt*>(stmt)) {
@@ -698,11 +931,11 @@ void CodeGen::compileExpr(Expr* expr) {
                         data << -(long long)num->value;
                     }
                 } else {
-                    data << "0";                             //  +x, !x и прочее — в следующих фазах
+                    data << "0";                            
                 }
             }
             else {
-                data << "0";                                 //  сложные элементы — в следующих фазах
+                data << "0";                                 
             }
             if (i + 1 < arrayLit->elements.size()) data << ",";
         }
@@ -721,6 +954,19 @@ void CodeGen::compileExpr(Expr* expr) {
         text << "    mov rdi, " << size << "\n";
         text << "    call lang_alloc\n";
         text << "    push rax\n";                            //  сохраним указатель на объект
+        //  Обнуляем весь объект: для DynArray-поля это гарантирует корректные len/cap=0,
+        //  если поле не задано явно (lang_alloc может вернуть неинициализированные байты
+        //  при повторном использовании адресов).
+        {
+            int zq = size / 8;
+            int zt = size % 8;
+            for (int k = 0; k < zq; k++) {
+                text << "    mov qword [rax + " << (k * 8) << "], 0\n";
+            }
+            for (int k = 0; k < zt; k++) {
+                text << "    mov byte [rax + " << (zq * 8 + k) << "], 0\n";
+            }
+        }
         auto& layout = structLayouts[sl->name];
 
         //  Собираем имена полей, для которых значение задано явно
@@ -805,6 +1051,52 @@ void CodeGen::compileExpr(Expr* expr) {
             }
         }
 
+        //  Поля с default вида `T = Struct{...}` дают heap-указатель, одинаковый во всех
+        //  инстансах при bytewise-копии. Переаллоцируем свежую копию на каждый `new`.
+        //  DynArray-поля — отдельный случай: 24-байтовый слот (ptr/len/cap) в дефолтном
+        //  экземпляре шарится буфером, поэтому на каждый `new` инициализируем поле заново
+        //  (из ArrayLiteral-дефолта либо пустым), независимо от содержимого дефолт-инстанса.
+        if (classDecls.count(newExpr->className)) {
+            ClassDecl* cd = classDecls[newExpr->className];
+            auto& layout = structLayouts[cd->name];
+            for (auto& field : cd->fields) {
+                bool isDynArr = (field.typeName.size() >= 2
+                              && field.typeName.substr(field.typeName.size() - 2) == "[]");
+                int off = 0;
+                if (layout.count(field.name)) off = layout[field.name];
+                if (isDynArr) {
+                    if (auto* arrLit = dynamic_cast<ArrayLiteral*>(field.defaultValue)) {
+                        int n = (int)arrLit->elements.size();
+                        text << "    mov rdi, " << (n * 8) << "\n";
+                        text << "    call lang_alloc\n";
+                        text << "    mov rbx, [rsp]\n";
+                        text << "    mov [rbx + " << off << "], rax\n";
+                        text << "    mov qword [rbx + " << (off + 8)  << "], " << n << "\n";
+                        text << "    mov qword [rbx + " << (off + 16) << "], " << n << "\n";
+                        for (int i = 0; i < n; ++i) {
+                            text << "    mov rbx, [rsp]\n";
+                            text << "    push qword [rbx + " << off << "]\n";
+                            compileExpr(arrLit->elements[i]);
+                            text << "    pop rbx\n";
+                            text << "    mov [rbx + " << (i * 8) << "], rax\n";
+                        }
+                    }
+                    else {
+                        text << "    mov rbx, [rsp]\n";
+                        text << "    mov qword [rbx + " << off       << "], 0\n";
+                        text << "    mov qword [rbx + " << (off + 8) << "], 0\n";
+                        text << "    mov qword [rbx + " << (off + 16)<< "], 0\n";
+                    }
+                    continue;
+                }
+                if (!field.defaultValue) continue;
+                if (!dynamic_cast<StructLiteral*>(field.defaultValue)) continue;
+                compileExpr(field.defaultValue);
+                text << "    mov rbx, [rsp]\n";
+                text << "    mov [rbx + " << off << "], rax\n";
+            }
+        }
+
         bool hasCtor = classDecls.count(newExpr->className) && classDecls[newExpr->className]->constructor;
         if (hasCtor) {
             //  Аргументы: пока поддерживаем 0–5 (this занимает rdi)
@@ -824,6 +1116,28 @@ void CodeGen::compileExpr(Expr* expr) {
         return;
     }
     if (auto* aa = dynamic_cast<ArrayAccess*>(expr)) {
+        std::shared_ptr<Type> objType = nullptr;
+        if (aa->object) objType = aa->object->resolvedType;
+
+        //  DynArray-путь с bounds-check: получаем &struct через emitDynArrayAddr (если доступно)
+        if (objType && objType->kind == TypeKind::DynArray && emitDynArrayAddr(aa->object, "rax")) {
+            text << "    push rax\n";                 //  сохраняем &struct
+            compileExpr(aa->index);
+            text << "    mov rbx, rax\n";
+            text << "    pop rax\n";                  //  rax = &struct
+            std::string okLabel = newLabel("bndok");
+            text << "    mov rcx, [rax + 8]\n";       //  rcx = len
+            text << "    cmp rbx, rcx\n";
+            text << "    jb " << okLabel << "\n";
+            text << "    lea rdi, [rel __rt_bounds]\n";
+            text << "    mov rsi, " << aa->line << "\n";
+            text << "    call lang_panic\n";
+            text << okLabel << ":\n";
+            text << "    mov rax, [rax]\n";           //  rax = ptr
+            text << "    mov rax, [rax + rbx*8]\n";
+            return;
+        }
+
         //  Базовый адрес → push, индекс → rbx, pop base
         compileExpr(aa->object);
         text << "    push rax\n";
@@ -831,13 +1145,12 @@ void CodeGen::compileExpr(Expr* expr) {
         text << "    mov rbx, rax\n";
         text << "    pop rax\n";
 
-        auto objType = aa->object ? aa->object->resolvedType : nullptr;
         if (objType && objType->kind == TypeKind::String) {
             //  Строка: элемент — один байт (char), без масштаба
             text << "    movzx rax, byte [rax + rbx]\n";
         }
         else if (objType && objType->kind == TypeKind::DynArray) {
-            //  DynArray: рантайм (lang_push/pop) кладёт элементы по qword, читаем qword
+            //  DynArray (fallback, без bounds-check): адрес струкутуры восстановить не смогли
             text << "    mov rax, [rax + rbx*8]\n";
         }
         else if (objType && objType->kind == TypeKind::Array) {
@@ -845,6 +1158,16 @@ void CodeGen::compileExpr(Expr* expr) {
             int sz = sizeOfType(elemT);
             bool isSigned = elemT && (elemT->kind == TypeKind::Int8 || elemT->kind == TypeKind::Int16
                                    || elemT->kind == TypeKind::Int32 || elemT->kind == TypeKind::Int64);
+            //  Bounds-check для статического массива: размер известен на компиляции
+            {
+                std::string okLabel = newLabel("bndok");
+                text << "    cmp rbx, " << objType->arraySize << "\n";
+                text << "    jb " << okLabel << "\n";
+                text << "    lea rdi, [rel __rt_bounds]\n";
+                text << "    mov rsi, " << aa->line << "\n";
+                text << "    call lang_panic\n";
+                text << okLabel << ":\n";
+            }
             if (sz == 1) {
                 if (isSigned) text << "    movsx rax, byte [rax + rbx]\n";
                 else          text << "    movzx rax, byte [rax + rbx]\n";
@@ -926,9 +1249,15 @@ void CodeGen::compileExpr(Expr* expr) {
             }
         }
         const LocalVar* lv = findLocal(id->name);
-        if (!lv) return;                             //  Семантик уже проверил существование
-        text << "    mov rax, [rbp" << lv->offset << "]\n";
-        return;
+        if (lv) {
+            text << "    mov rax, [rbp" << lv->offset << "]\n";
+            return;
+        }
+        if (isGlobal(id->name)) {
+            text << "    mov rax, [rel __global_" << id->name << "]\n";
+            return;
+        }
+        return;                                      //  Семантик уже проверил существование
     }
     if (auto* unary = dynamic_cast<Unary*>(expr)) {
         if (unary->op == Operand::UnaryPlus) {
@@ -937,7 +1266,8 @@ void CodeGen::compileExpr(Expr* expr) {
         }
         if (unary->op == Operand::UnaryMinus) {
             compileExpr(unary->operand);
-            auto t = unary->operand ? unary->operand->resolvedType : nullptr;
+            std::shared_ptr<Type> t = nullptr;
+            if (unary->operand) t = unary->operand->resolvedType;
             bool isFloat = t && (t->kind == TypeKind::Float32 || t->kind == TypeKind::Float64);
             if (isFloat) {
                 //  Для float — инвертируем только знаковый бит, не все биты
@@ -953,12 +1283,21 @@ void CodeGen::compileExpr(Expr* expr) {
             //  ++/-- на идентификаторе: читаем → меняем в памяти → возвращаем новое значение
             if (auto* id = dynamic_cast<Identifier*>(unary->operand)) {
                 const LocalVar* lv = findLocal(id->name);
-                if (!lv) return;
-                if (unary->op == Operand::Increment)
-                    text << "    inc qword [rbp" << lv->offset << "]\n";
-                else
-                    text << "    dec qword [rbp" << lv->offset << "]\n";
-                text << "    mov rax, [rbp" << lv->offset << "]\n";
+                if (lv) {
+                    if (unary->op == Operand::Increment)
+                        text << "    inc qword [rbp" << lv->offset << "]\n";
+                    else
+                        text << "    dec qword [rbp" << lv->offset << "]\n";
+                    text << "    mov rax, [rbp" << lv->offset << "]\n";
+                }
+                else if (isGlobal(id->name)) {
+                    std::string slot = "__global_" + id->name;
+                    if (unary->op == Operand::Increment)
+                        text << "    inc qword [rel " << slot << "]\n";
+                    else
+                        text << "    dec qword [rel " << slot << "]\n";
+                    text << "    mov rax, [rel " << slot << "]\n";
+                }
             }
             return;
         }
@@ -1015,17 +1354,14 @@ void CodeGen::compileExpr(Expr* expr) {
 
         //  Конкатенация строк: left + right → lang_strcat(left, right).
         //  Операнд-char превращаем в указатель на временную 2-байтовую строку "{c,\0}" на стеке.
-        auto isStrOrChar = [](const std::shared_ptr<Type>& t) {
-            return t && (t->kind == TypeKind::String || t->kind == TypeKind::Char);
-        };
         bool leftIsStr  = bin->left  && bin->left->resolvedType  && bin->left->resolvedType->kind  == TypeKind::String;
         bool rightIsStr = bin->right && bin->right->resolvedType && bin->right->resolvedType->kind == TypeKind::String;
         bool leftIsChar  = bin->left  && bin->left->resolvedType  && bin->left->resolvedType->kind  == TypeKind::Char;
         bool rightIsChar = bin->right && bin->right->resolvedType && bin->right->resolvedType->kind == TypeKind::Char;
         bool isStringConcat = bin->op == Operand::Add
-            && isStrOrChar(bin->left  ? bin->left->resolvedType  : nullptr)
-            && isStrOrChar(bin->right ? bin->right->resolvedType : nullptr)
-            && (leftIsStr || rightIsStr);
+            && (leftIsStr  || leftIsChar)
+            && (rightIsStr || rightIsChar)
+            && (leftIsStr  || rightIsStr);
         if (isStringConcat) {
             //  Для каждого операнда-char пушим qword с младшим байтом = символ, остальные = 0.
             //  Получаем валидный C-string из 2 байт: {c, '\0'} лежит по адресу rsp на момент вызова.
@@ -1076,12 +1412,12 @@ void CodeGen::compileExpr(Expr* expr) {
                     text << "    ucomisd xmm0, xmm1\n";
                     const char* cc = "e";
                     switch (bin->op) {
-                        case Operand::Less:         cc = "b";  break;
-                        case Operand::Greater:      cc = "a";  break;
-                        case Operand::LessEqual:    cc = "be"; break;
+                        case Operand::Less: cc = "b";  break;
+                        case Operand::Greater: cc = "a";  break;
+                        case Operand::LessEqual: cc = "be"; break;
                         case Operand::GreaterEqual: cc = "ae"; break;
-                        case Operand::EqualEqual:   cc = "e";  break;
-                        case Operand::NotEqual:     cc = "ne"; break;
+                        case Operand::EqualEqual: cc = "e";  break;
+                        case Operand::NotEqual: cc = "ne"; break;
                         default: break;
                     }
                     text << "    set" << cc << " al\n";
@@ -1115,15 +1451,31 @@ void CodeGen::compileExpr(Expr* expr) {
                 if (isUnsigned) text << "    mul rbx\n";           //  rdx:rax = rax * rbx
                 else            text << "    imul rax, rbx\n";
                 break;
-            case Operand::Div:
+            case Operand::Div: {
+                std::string okLabel = newLabel("divok");
+                text << "    test rbx, rbx\n";
+                text << "    jnz " << okLabel << "\n";
+                text << "    lea rdi, [rel __rt_div_zero]\n";
+                text << "    mov rsi, " << bin->line << "\n";
+                text << "    call lang_panic\n";
+                text << okLabel << ":\n";
                 if (isUnsigned) text << "    xor rdx, rdx\n    div rbx\n";
                 else            text << "    cqo\n    idiv rbx\n";
                 break;
-            case Operand::Mod:
+            }
+            case Operand::Mod: {
+                std::string okLabel = newLabel("modok");
+                text << "    test rbx, rbx\n";
+                text << "    jnz " << okLabel << "\n";
+                text << "    lea rdi, [rel __rt_div_zero]\n";
+                text << "    mov rsi, " << bin->line << "\n";
+                text << "    call lang_panic\n";
+                text << okLabel << ":\n";
                 if (isUnsigned) text << "    xor rdx, rdx\n    div rbx\n";
                 else            text << "    cqo\n    idiv rbx\n";
                 text << "    mov rax, rdx\n";
                 break;
+            }
             case Operand::Less: 
             case Operand::Greater:
             case Operand::LessEqual:
@@ -1285,40 +1637,6 @@ void CodeGen::compileExpr(Expr* expr) {
             text << "    call print_newline\n";
             return;
         }
-        //  Вычисляет адрес DynArray-переменной/поля в регистр reg. Возвращает true при успехе.
-        //  Поддерживает: локальная DynArray-переменная; поле текущего класса; поле дефолтного экземпляра класса (ClassName.field).
-        auto emitDynArrayAddr = [&](Expr* e, const char* reg) -> bool {
-            if (auto* id = dynamic_cast<Identifier*>(e)) {
-                const LocalVar* lv = findLocal(id->name);
-                if (lv) {
-                    text << "    lea " << reg << ", [rbp" << lv->offset << "]\n";
-                    return true;
-                }
-                if (currentClass) {
-                    auto& layout = structLayouts[currentClass->name];
-                    if (layout.count(id->name)) {
-                        const LocalVar* selfVar = findLocal("self");
-                        int off = layout[id->name];
-                        text << "    mov " << reg << ", [rbp" << selfVar->offset << "]\n";
-                        if (off != 0) text << "    add " << reg << ", " << off << "\n";
-                        return true;
-                    }
-                }
-            }
-            if (auto* fa = dynamic_cast<FieldAccess*>(e)) {
-                //  ClassName.field — адрес внутри дефолтного экземпляра
-                if (auto* obj = dynamic_cast<Identifier*>(fa->object)) {
-                    if (classDecls.count(obj->name)) {
-                        auto& layout = structLayouts[obj->name];
-                        int off = layout.count(fa->field) ? layout[fa->field] : 0;
-                        text << "    lea " << reg << ", [rel __default_instance_" << obj->name << " + " << off << "]\n";
-                        return true;
-                    }
-                }
-            }
-            return false;
-        };
-
         //  push(arr, elem) — arr поддерживается как локальная DynArray или поле класса
         if (callName == "push" && fc->args.size() == 2) {
             //  Вычислим элемент первым (может клобберить rdi), сохраним на стеке
@@ -1332,6 +1650,7 @@ void CodeGen::compileExpr(Expr* expr) {
         //  pop(arr) → rax = последний элемент
         if (callName == "pop" && fc->args.size() == 1) {
             if (!emitDynArrayAddr(fc->args[0], "rdi")) return;
+            text << "    mov rsi, " << fc->line << "\n";
             text << "    call lang_pop\n";
             return;
         }
@@ -1360,14 +1679,22 @@ void CodeGen::compileExpr(Expr* expr) {
             auto& argType = fc->args[i]->resolvedType;
             bool isDyn = argType && argType->kind == TypeKind::DynArray;
             if (isDyn) {
-                //  DynArray по значению: источник — только Identifier локалки (иначе не взять все 3 поля)
+                //  DynArray по значению: источник — Identifier локалки/глобалки (иначе не взять все 3 поля)
                 auto* id = dynamic_cast<Identifier*>(fc->args[i]);
                 if (!id) return;
                 const LocalVar* lv = findLocal(id->name);
-                if (!lv) return;
-                text << "    push qword [rbp" << (lv->offset + 16) << "]\n";  //  cap — ниже в стэке
-                text << "    push qword [rbp" << (lv->offset + 8)  << "]\n";  //  len — в середине
-                text << "    push qword [rbp" << lv->offset        << "]\n";  //  ptr — на вершине
+                if (lv) {
+                    text << "    push qword [rbp" << (lv->offset + 16) << "]\n";  //  cap — ниже в стэке
+                    text << "    push qword [rbp" << (lv->offset + 8)  << "]\n";  //  len — в середине
+                    text << "    push qword [rbp" << lv->offset        << "]\n";  //  ptr — на вершине
+                }
+                else if (isGlobal(id->name)) {
+                    std::string slot = "__global_" + id->name;
+                    text << "    push qword [rel " << slot << " + 16]\n";
+                    text << "    push qword [rel " << slot << " + 8]\n";
+                    text << "    push qword [rel " << slot << "]\n";
+                }
+                else return;
                 qwordsPushed += 3;
             }
             else {
