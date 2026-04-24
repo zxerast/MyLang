@@ -83,16 +83,25 @@ public:
             current = current->parent;
     }
 
-    std::expected<void, std::string> declare(std::shared_ptr<Symbol> sym) {     // Объявляем символ в текущем scope
-        if (current->symbols.contains(sym->name)) {  // Возвращает ошибку если имя уже занято в этом же scope
-            return std::unexpected("'" + sym->name + "' is already declared in this scope");
-        }
-        current->symbols[sym->name] = sym;  //  Иначе закидываем в текущий Scope
+    //  Объявление: переопределение в той же области допустимо (shadowing по спеке).
+    //  Поэтому просто перезаписываем запись, не считая это ошибкой.
+    std::expected<void, std::string> declare(std::shared_ptr<Symbol> sym) {
+        current->symbols[sym->name] = sym;
         return {};
     }
 
-    std::shared_ptr<Scope> currentScope() { 
-        return current; 
+    //  Объявление без shadowing — для функций/структур/классов/пространств имён,
+    //  где повторное объявление одного имени запрещено.
+    std::expected<void, std::string> declareStrict(std::shared_ptr<Symbol> sym) {
+        if (current->symbols.contains(sym->name)) {
+            return std::unexpected("'" + sym->name + "' is already declared in this scope");
+        }
+        current->symbols[sym->name] = sym;
+        return {};
+    }
+
+    std::shared_ptr<Scope> currentScope() {
+        return current;
     }
 
     std::shared_ptr<Symbol> resolve(const std::string& name) {
@@ -102,6 +111,28 @@ public:
                 return it->second;  //  Возвращаем значение по имени символа
         }
         return nullptr;     // Если не найдём
+    }
+
+    //  Разрешение квалифицированного имени "A::B::C". Ищем A в цепочке scope,
+    //  затем последовательно идём вглубь по namespace-scope'ам.
+    std::shared_ptr<Symbol> resolveQualified(const std::string& path) {
+        size_t pos = 0;
+        std::vector<std::string> parts;
+        while (pos < path.size()){
+            size_t next = path.find("::", pos);
+            if (next == std::string::npos){ parts.push_back(path.substr(pos)); break; }
+            parts.push_back(path.substr(pos, next - pos));
+            pos = next + 2;
+        }
+        if (parts.empty()) return nullptr;
+        auto sym = resolve(parts[0]);
+        for (size_t j = 1; j < parts.size(); j++){
+            if (!sym || sym->kind != SymbolKind::Namespace || !sym->namespaceScope) return nullptr;
+            auto it = sym->namespaceScope->symbols.find(parts[j]);
+            if (it == sym->namespaceScope->symbols.end()) return nullptr;
+            sym = it->second;
+        }
+        return sym;
     }
 };
 

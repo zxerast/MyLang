@@ -1,0 +1,42 @@
+// geometry.lang
+export namespace Math {
+    export namespace Constants {
+        export const float PI = 3.14159;
+    }
+
+    export type Scalar = float;
+
+    export struct Vector2D {
+        Scalar x = 0.0;
+        Scalar y = 0.0;
+    }
+}
+
+export class ShapeProcessor {
+    int id;
+    string name = "Generic";
+    
+    // Вложенная структура
+    struct Metadata {
+        int createdAt = 2026;
+    }
+
+    // Конструктор
+    ShapeProcessor(int sid) {
+        id = sid;
+        // Изменение глобального значения по умолчанию для Vector2D внутри этого контекста
+        Math::Vector2D.x = 1.0; 
+    }
+
+    // Метод с параметрами по умолчанию
+    void process(Math::Vector2D vec, int multiplier = 1) {
+        print("Processing ", name, " with ID: ", id);
+        float result = cast<float>(multiplier) * (vec.x + vec.y);
+        print("Result: ", result);
+    }
+
+    // Деструктор
+    ~ShapeProcessor() {
+        print("Processor ", id, " destroyed");
+    }
+}

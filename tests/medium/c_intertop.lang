@@ -1,0 +1,47 @@
+// c_interop.lang
+import <string.h>
+
+void testCInterop() {
+    string myStr = "Hello C";
+    // MyLang передаст const char* автоматически
+    // len из C возвращает size_t (uint64)
+    // Мы используем uint64 как аналог ptr/size_t
+    
+    // В MyLang тип ptr передается как uint64
+    uint64 memory = 1024; // Представим как адрес
+    print("Simulated pointer: ", memory);
+}
+
+void testRuntimeErrors(bool trigger) {
+    if (!trigger) { return; }
+
+    int zero = 0;
+    // Ожидается runtime error: division by zero
+    int crash = 10 / zero; 
+    
+    int[2] fixedArr = [1, 2];
+    // Ожидается runtime error: index out of bounds
+    int out = fixedArr[5];
+}
+
+int main() {
+    testCInterop();
+    
+    auto dynamicVar = "Inferring types..."; // Проверка auto
+    print(dynamicVar);
+
+    // Безопасное приведение через cast
+    float pi = 3.14;
+    int truncatedPi = cast<int>(pi); 
+    
+    // Проверка строковых приведений
+    bool isTrue = cast<bool>("Some text"); // true
+    bool isFalse = cast<bool>("NULL");     // false
+    
+    print("Cast string to bool: ", isTrue, " and ", isFalse);
+
+    // Раскомментировать для теста паники
+    // testRuntimeErrors(true);
+
+    return 0;
+}

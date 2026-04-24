@@ -1,0 +1,58 @@
+// main.lang
+import "geometry.lang"
+import <stdlib.h> // Импорт из C
+
+void testValueSemantics() {
+    Math::Vector2D v1 = Math::Vector2D { x: 5.0, y: 10.0 };
+    Math::Vector2D v2 = v1; // Копирование (Value semantics)
+    v2.x = 99.0;
+    
+    if (v1.x == 5.0) {
+        print("Success: Value semantics preserved");
+    } else {
+        panic("Failure: Reference semantics detected!");
+    }
+}
+
+void testArrayLogic() {
+    int[] nums = [1, 2, 3];
+    push(4, nums);
+    
+    print("Array len: ", len(nums)); // 4
+    
+    int last = pop(nums);
+    print("Popped: ", last); // 4
+
+    // Вложенные динамические массивы
+    int[][] matrix = [[1, 2], [3, 4]];
+    print("Matrix[1][0]: ", matrix[1][0]); // 3
+}
+
+void testShadowing() {
+    int x = 10;
+    {
+        int x = 20; // Shadowing
+        int x = 30; // Shadowing (по очереди объявлений в одном блоке)
+        print("Inner x: ", x); // 30
+    }
+    print("Outer x: ", x); // 10
+}
+
+int main() {
+    // Проверка контекстной типизации и widening
+    int8 shortNum = 5;
+    float64 wideNum = shortNum; // Автоматическое расширение
+    
+    testValueSemantics();
+    testArrayLogic();
+    testShadowing();
+
+    // Работа с классом из модуля
+    ShapeProcessor proc = ShapeProcessor(101);
+    
+    // Point.x теперь 1.0 по умолчанию из-за конструктора ShapeProcessor
+    Math::Vector2D vec; 
+    proc.process(vec, 10); 
+
+    return 0;
+}

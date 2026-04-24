@@ -1,0 +1,73 @@
+import "geometry.lang";
+
+// 1. Проверка двухпроходного анализа: вызываем функции до их объявления
+void testTopLevel() {
+    print("Top-level order check: ", lateFunction(5, 5)); 
+}
+
+// 2. Сложные выражения и операторы
+void testOperators() {
+    int x = 10;
+    x += 5; x *= 2; x /= 3; // Составное присваивание
+    
+    bool complexLogic = !(x > 5) || (x == 10 && true); // Приоритеты
+    
+    int a = 0;
+    int b = a++; // Постфиксный инкремент
+    int c = --a; // Префиксный декремент
+    
+    print("Ops: ", x, complexLogic, a);
+}
+
+// 3. Специфика Shadowing: двойное объявление в ОДНОЙ области
+void testDoubleDecl() {
+    int x = 1;
+    print(x); // 1
+    int x = 2; // В MyLang это разрешено: новый x перекрывает старый
+    print(x); // 2
+}
+
+// 4. Фиксированные массивы и выражения в размере
+void testFixedArrays() {
+    const int size = 5;
+    int[size * 2] largeArr; // Размер — произвольное выражение
+    largeArr[0] = 100;
+    
+    // Вложенные фиксированные массивы
+    int[2][2] matrix = [[1, 2], [3, 4]]; 
+    print("Fixed matrix: ", matrix[0][1]);
+}
+
+// 5. Символы и строки
+void testChars() {
+    char letter = 'A'; // Тип char
+    int code = cast<int>(letter); // Приведение к int (значение байта)
+    
+    string s = "MyLang";
+    print("String index: ", s[0]); // Индексирование строк
+}
+
+// 6. Управление потоком: break/continue в while
+void testLoop() {
+    int i = 0;
+    while (true) {
+        i++;
+        if (i < 5) { continue; }
+        if (i == 10) { break; }
+    }
+}
+
+// Реализация функции для теста №1
+int lateFunction(int a, int b) {
+    return a + b;
+}
+
+int main() {
+    testTopLevel();
+    testOperators();
+    testDoubleDecl();
+    testFixedArrays();
+    testChars();
+    testLoop();
+    return 0;
+}

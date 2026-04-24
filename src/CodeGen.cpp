@@ -307,6 +307,10 @@ std::expected<void, std::string> CodeGen::generate(Program* program, const std::
     text << "extern print_space\n";
     text << "extern print_newline\n";
     text << "extern lang_input\n";      //  lang_ префикс — чтобы не конфликтовать с libc (strlen/free/exit/input)
+    text << "extern lang_input_int\n";
+    text << "extern lang_input_float\n";
+    text << "extern lang_input_bool\n";
+    text << "extern lang_input_char\n";
     text << "extern lang_strlen\n";
     text << "extern lang_panic\n";
     text << "extern lang_exit\n";
@@ -314,7 +318,8 @@ std::expected<void, std::string> CodeGen::generate(Program* program, const std::
     text << "extern lang_free\n";
     text << "extern lang_push\n";
     text << "extern lang_pop\n";
-    text << "extern lang_strcat\n\n";
+    text << "extern lang_strcat\n";
+    text << "extern lang_streq\n\n";
 
     //  Сообщения рантайма (формирует lang_panic как "runtime error: <msg> at line <N>")
     rodata << "__rt_div_zero: db \"division by zero\", 0\n";
@@ -390,6 +395,7 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
     classLocals.clear();
     currentFrameSize = 0;   //  Байт на функцию
     currentEndLabel = ".end_of_" + func->name;  //  Имя метки переводящей в конец, для return
+    currentReturnType = func->returnType;
 
     std::string symbol = func->name;
     text << "global " << symbol << "\n";    //  Определяем нашу функцию глобальной
@@ -594,7 +600,23 @@ void CodeGen::compileStmt(Stmt* stmt) {
                 text << "    mov qword [rbp" << off << "], 0\n";
                 text << "    mov qword [rbp" << (off + 8) << "], 0\n";
                 text << "    mov qword [rbp" << (off + 16) << "], 0\n";
+                return;
             }
+            //  Источник — место в памяти (другая DynArray-локалка / поле): копируем 24 байта.
+            if (emitDynArrayAddr(var->init, "rsi")) {
+                text << "    mov rax, [rsi]\n";
+                text << "    mov [rbp" << off << "], rax\n";
+                text << "    mov rax, [rsi + 8]\n";
+                text << "    mov [rbp" << (off + 8) << "], rax\n";
+                text << "    mov rax, [rsi + 16]\n";
+                text << "    mov [rbp" << (off + 16) << "], rax\n";
+                return;
+            }
+            //  FuncCall (или иное выражение), возвращающее DynArray: ptr/len/cap в rax/rdx/rcx.
+            compileExpr(var->init);
+            text << "    mov [rbp" << off << "], rax\n";
+            text << "    mov [rbp" << (off + 8) << "], rdx\n";
+            text << "    mov [rbp" << (off + 16) << "], rcx\n";
             return;
         }
         if (var->init) {
@@ -763,6 +785,37 @@ void CodeGen::compileStmt(Stmt* stmt) {
         return;
     }
     if (auto* ret = dynamic_cast<Return*>(stmt)) {
+        //  DynArray-возврат: соглашение — ptr в rax, len в rdx, cap в rcx (24 байта не умещаются в rax+rdx SysV ABI).
+        //  Обрабатываем 3 источника: место в памяти (emitDynArrayAddr), литерал массива, FuncCall (ABI уже совпадает).
+        bool retIsDyn = currentReturnType.size() >= 2 && currentReturnType.substr(currentReturnType.size() - 2) == "[]";
+        if (ret->value && retIsDyn) {
+            if (auto* arrLit = dynamic_cast<ArrayLiteral*>(ret->value)) {
+                int n = (int)arrLit->elements.size();
+                text << "    mov rdi, " << (n * 8) << "\n";
+                text << "    call lang_alloc\n";
+                text << "    push rax\n";                               //  сохраняем ptr на стеке
+                for (int i = 0; i < n; ++i) {
+                    compileExpr(arrLit->elements[i]);
+                    text << "    mov rbx, [rsp]\n";
+                    text << "    mov [rbx + " << (i * 8) << "], rax\n";
+                }
+                text << "    pop rax\n";
+                text << "    mov rdx, " << n << "\n";
+                text << "    mov rcx, " << n << "\n";
+            }
+            else if (emitDynArrayAddr(ret->value, "r11")) {
+                text << "    mov rax, [r11]\n";
+                text << "    mov rdx, [r11 + 8]\n";
+                text << "    mov rcx, [r11 + 16]\n";
+            }
+            else {
+                //  Прочие выражения (в т.ч. FuncCall, возвращающий DynArray): ABI уже совпадает —
+                //  callee кладёт ptr/len/cap в rax/rdx/rcx, нам остаётся пропустить compileExpr.
+                compileExpr(ret->value);
+            }
+            text << "    jmp " << currentEndLabel << "\n";
+            return;
+        }
         if (ret->value) compileExpr(ret->value);         //  Значение в rax
         text << "    jmp " << currentEndLabel << "\n";
         return;
@@ -1385,6 +1438,23 @@ void CodeGen::compileExpr(Expr* expr) {
             return;
         }
 
+        //  Сравнение строк по содержимому через lang_streq (возвращает 1/0 в rax).
+        //  Без этого `==`/`!=` делали бы cmp rax, rbx — сравнение указателей.
+        bool isStringEq = (bin->op == Operand::EqualEqual || bin->op == Operand::NotEqual)
+            && leftIsStr && rightIsStr;
+        if (isStringEq) {
+            compileExpr(bin->left);
+            text << "    push rax\n";
+            compileExpr(bin->right);
+            text << "    mov rsi, rax\n";
+            text << "    pop rdi\n";
+            text << "    call lang_streq\n";
+            if (bin->op == Operand::NotEqual) {
+                text << "    xor rax, 1\n";
+            }
+            return;
+        }
+
         //  Float-арифметика: вычисляем в xmm0/xmm1, результат обратно в rax через movq
         bool isFloat = false;
         if (bin->left && bin->left->resolvedType) {
@@ -1476,12 +1546,39 @@ void CodeGen::compileExpr(Expr* expr) {
                 text << "    mov rax, rdx\n";
                 break;
             }
-            case Operand::Less: 
+            case Operand::Less:
             case Operand::Greater:
             case Operand::LessEqual:
             case Operand::GreaterEqual:
-            case Operand::EqualEqual: 
+            case Operand::EqualEqual:
             case Operand::NotEqual: {
+                //  Нормализуем верхние биты каждого операнда по его собственному типу —
+                //  иначе extern-C возврат int32 или другие пути с мусором в старших битах
+                //  дадут ложный результат cmp. Для int64/uint64 не делаем ничего.
+                auto leftT  = bin->left  ? bin->left->resolvedType  : nullptr;
+                auto rightT = bin->right ? bin->right->resolvedType : nullptr;
+                if (leftT) {
+                    switch (leftT->kind) {
+                        case TypeKind::Int8:   text << "    movsx rax, al\n"; break;
+                        case TypeKind::Int16:  text << "    movsx rax, ax\n"; break;
+                        case TypeKind::Int32:  text << "    movsxd rax, eax\n"; break;
+                        case TypeKind::Uint8:  text << "    movzx rax, al\n"; break;
+                        case TypeKind::Uint16: text << "    movzx rax, ax\n"; break;
+                        case TypeKind::Uint32: text << "    mov eax, eax\n"; break;
+                        default: break;
+                    }
+                }
+                if (rightT) {
+                    switch (rightT->kind) {
+                        case TypeKind::Int8:   text << "    movsx rbx, bl\n"; break;
+                        case TypeKind::Int16:  text << "    movsx rbx, bx\n"; break;
+                        case TypeKind::Int32:  text << "    movsxd rbx, ebx\n"; break;
+                        case TypeKind::Uint8:  text << "    movzx rbx, bl\n"; break;
+                        case TypeKind::Uint16: text << "    movzx rbx, bx\n"; break;
+                        case TypeKind::Uint32: text << "    mov ebx, ebx\n"; break;
+                        default: break;
+                    }
+                }
                 text << "    cmp rax, rbx\n";
                 const char* cc = "e";
                 switch (bin->op) {
@@ -1679,22 +1776,22 @@ void CodeGen::compileExpr(Expr* expr) {
             auto& argType = fc->args[i]->resolvedType;
             bool isDyn = argType && argType->kind == TypeKind::DynArray;
             if (isDyn) {
-                //  DynArray по значению: источник — Identifier локалки/глобалки (иначе не взять все 3 поля)
-                auto* id = dynamic_cast<Identifier*>(fc->args[i]);
-                if (!id) return;
-                const LocalVar* lv = findLocal(id->name);
-                if (lv) {
-                    text << "    push qword [rbp" << (lv->offset + 16) << "]\n";  //  cap — ниже в стэке
-                    text << "    push qword [rbp" << (lv->offset + 8)  << "]\n";  //  len — в середине
-                    text << "    push qword [rbp" << lv->offset        << "]\n";  //  ptr — на вершине
+                //  DynArray по значению: 3 qword'а (ptr/len/cap) нужно положить на стек.
+                //  Сначала пробуем emitDynArrayAddr — покрывает Identifier (локалка/глобалка),
+                //  self-поле класса, ClassName.field (дефолтный экземпляр) и instance.field.
+                if (emitDynArrayAddr(fc->args[i], "r11")) {
+                    text << "    push qword [r11 + 16]\n";                      //  cap — ниже в стэке
+                    text << "    push qword [r11 + 8]\n";                       //  len — в середине
+                    text << "    push qword [r11]\n";                           //  ptr — на вершине
                 }
-                else if (isGlobal(id->name)) {
-                    std::string slot = "__global_" + id->name;
-                    text << "    push qword [rel " << slot << " + 16]\n";
-                    text << "    push qword [rel " << slot << " + 8]\n";
-                    text << "    push qword [rel " << slot << "]\n";
+                else {
+                    //  Иначе выражение вычисляется с ABI-возвратом DynArray: ptr в rax, len в rdx, cap в rcx.
+                    //  Подходит для FuncCall, возвращающего DynArray.
+                    compileExpr(fc->args[i]);
+                    text << "    push rcx\n";
+                    text << "    push rdx\n";
+                    text << "    push rax\n";
                 }
-                else return;
                 qwordsPushed += 3;
             }
             else {
@@ -1745,8 +1842,21 @@ void CodeGen::compileExpr(Expr* expr) {
             //  input/exit/panic живут в рантайме под lang_-именами (чтобы не конфликтовать с libc).
             //  Всё остальное — пользовательские/namespace/метод-функции без префикса.
             bool isRuntimeBuiltin = (callName == "input" || callName == "exit" || callName == "panic");
-            if (isRuntimeBuiltin) text << "    call lang_" << callName << "\n";
-            else                  text << "    call " << callName << "\n";
+            if (callName == "input") {
+                //  Диспатч по контекстному типу: int*/uint* → lang_input_int,
+                //  float* → lang_input_float, bool → lang_input_bool, char → lang_input_char, иначе lang_input.
+                auto rt = fc->resolvedType;
+                const char* target = "lang_input";
+                if (rt) {
+                    if (rt->kind >= TypeKind::Int8 && rt->kind <= TypeKind::Uint64)      target = "lang_input_int";
+                    else if (rt->kind == TypeKind::Float32 || rt->kind == TypeKind::Float64) target = "lang_input_float";
+                    else if (rt->kind == TypeKind::Bool)                                  target = "lang_input_bool";
+                    else if (rt->kind == TypeKind::Char)                                  target = "lang_input_char";
+                }
+                text << "    call " << target << "\n";
+            }
+            else if (isRuntimeBuiltin) text << "    call lang_" << callName << "\n";
+            else                       text << "    call " << callName << "\n";
             if (stackArgCount > 0) text << "    add rsp, " << (stackArgCount * 8) << "\n";
         }
         return;

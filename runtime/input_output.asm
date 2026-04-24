@@ -215,39 +215,219 @@ lang_input:
     push rbp
     mov rbp, rsp
     push rbx
-    sub rsp, 8                      ;  выравнивание стека до 16 байт перед call
+    push r12
 
     mov rdi, 4096
     call lang_alloc
-    mov rbx, rax                    ;  сохраним указатель на буфер
-
-    ;  sys_read(fd=0, buf=rbx, count=4095) → rax = число прочитанных байт
-    xor rdi, rdi                    ;  fd = 0 (stdin)
-    mov rsi, rbx
-    mov rdx, 4095                   ;  оставляем 1 байт под \0
+    mov rbx, rax                    ;  буфер
+    xor r12, r12                    ;  длина прочитанного
+.inp_read_byte:
+    cmp r12, 4095
+    jae .inp_term
     xor rax, rax                    ;  sys_read
+    xor rdi, rdi                    ;  fd = 0
+    lea rsi, [rbx + r12]
+    mov rdx, 1                      ;  по одному байту, чтобы остановиться на \n и не поглотить следующую строку
     syscall
-
-    ;  Если ошибка или EOF — возвращаем пустую строку
     test rax, rax
-    jle .inp_empty
-
-    ;  Если последний байт \n — затираем его, иначе ставим \0 после хвоста
-    lea rcx, [rbx+rax-1]
-    cmp byte [rcx], 10
-    jne .inp_term
-    mov byte [rcx], 0
-    jmp .inp_done
+    jle .inp_term                   ;  EOF или ошибка
+    mov dl, [rbx + r12]
+    inc r12
+    cmp dl, 10
+    je .inp_strip_nl
+    jmp .inp_read_byte
+.inp_strip_nl:
+    dec r12                         ;  не включаем \n в строку
 .inp_term:
-    mov byte [rbx+rax], 0
-    jmp .inp_done
-.inp_empty:
-    mov byte [rbx], 0
+    mov byte [rbx + r12], 0
 
-.inp_done:
-    mov rax, rbx                    ;  результат — указатель на буфер
-    add rsp, 8
+    mov rax, rbx
+    pop r12
     pop rbx
+    mov rsp, rbp
+    pop rbp
+    ret
+
+;  ──────────────────────────────────────────────────────────────
+;  lang_input_int () → rax = int64 — читает строку через lang_input
+;  и парсит как знаковое десятичное. Мусорные символы игнорируются
+;  после первого не-цифрового байта (после знака). Пусто/мусор → 0.
+;  ──────────────────────────────────────────────────────────────
+global lang_input_int
+lang_input_int:
+    push rbp
+    mov rbp, rsp
+    sub rsp, 16                     ;  выравнивание + слот
+
+    call lang_input                 ;  rax = char*
+    mov rcx, rax                    ;  rcx — курсор
+    xor rax, rax                    ;  результат
+    xor r8, r8                      ;  знак (1 если минус)
+
+    mov dl, [rcx]
+    cmp dl, '-'
+    jne .lii_checkplus
+    mov r8, 1
+    inc rcx
+    jmp .lii_loop
+.lii_checkplus:
+    cmp dl, '+'
+    jne .lii_loop
+    inc rcx
+.lii_loop:
+    mov dl, [rcx]
+    test dl, dl
+    jz .lii_done
+    cmp dl, '0'
+    jb .lii_done
+    cmp dl, '9'
+    ja .lii_done
+    imul rax, rax, 10
+    sub dl, '0'
+    movzx rdx, dl
+    add rax, rdx
+    inc rcx
+    jmp .lii_loop
+.lii_done:
+    test r8, r8
+    jz .lii_ret
+    neg rax
+.lii_ret:
+    mov rsp, rbp
+    pop rbp
+    ret
+
+;  ──────────────────────────────────────────────────────────────
+;  lang_input_float () → rax = бит-паттерн float64
+;  Парсит строку [-]?digits(.digits)? ; остальное игнорирует.
+;  ──────────────────────────────────────────────────────────────
+global lang_input_float
+lang_input_float:
+    push rbp
+    mov rbp, rsp
+    sub rsp, 16
+
+    call lang_input
+    mov rcx, rax                    ;  курсор
+    pxor xmm0, xmm0                 ;  целая часть (double)
+    pxor xmm1, xmm1                 ;  дробная часть
+    pxor xmm2, xmm2                 ;  делитель для дробной (10, 100, ...)
+    xor r8, r8                      ;  знак
+
+    mov dl, [rcx]
+    cmp dl, '-'
+    jne .lif_checkplus
+    mov r8, 1
+    inc rcx
+    jmp .lif_int
+.lif_checkplus:
+    cmp dl, '+'
+    jne .lif_int
+    inc rcx
+.lif_int:
+    mov dl, [rcx]
+    test dl, dl
+    jz .lif_done
+    cmp dl, '.'
+    je .lif_dot
+    cmp dl, '0'
+    jb .lif_done
+    cmp dl, '9'
+    ja .lif_done
+    ;  xmm0 = xmm0*10 + digit
+    mov rax, 10
+    cvtsi2sd xmm3, rax
+    mulsd xmm0, xmm3
+    sub dl, '0'
+    movzx rax, dl
+    cvtsi2sd xmm3, rax
+    addsd xmm0, xmm3
+    inc rcx
+    jmp .lif_int
+.lif_dot:
+    inc rcx                          ;  пропускаем '.'
+    mov rax, 1
+    cvtsi2sd xmm2, rax               ;  divisor = 1
+.lif_frac:
+    mov dl, [rcx]
+    test dl, dl
+    jz .lif_done
+    cmp dl, '0'
+    jb .lif_done
+    cmp dl, '9'
+    ja .lif_done
+    mov rax, 10
+    cvtsi2sd xmm3, rax
+    mulsd xmm2, xmm3                 ;  divisor *= 10
+    sub dl, '0'
+    movzx rax, dl
+    cvtsi2sd xmm3, rax
+    divsd xmm3, xmm2                 ;  digit/divisor
+    addsd xmm0, xmm3
+    inc rcx
+    jmp .lif_frac
+.lif_done:
+    test r8, r8
+    jz .lif_ret
+    ;  negate xmm0 via xor на знаковый бит
+    mov rax, 0x8000000000000000
+    movq xmm3, rax
+    xorpd xmm0, xmm3
+.lif_ret:
+    movq rax, xmm0
+    mov rsp, rbp
+    pop rbp
+    ret
+
+;  ──────────────────────────────────────────────────────────────
+;  lang_input_bool () → rax = 0/1. "true"/"1" → 1, иначе 0.
+;  ──────────────────────────────────────────────────────────────
+global lang_input_bool
+lang_input_bool:
+    push rbp
+    mov rbp, rsp
+    sub rsp, 16
+
+    call lang_input
+    ;  сравним с "1"
+    mov dl, [rax]
+    cmp dl, '1'
+    jne .lib_checktrue
+    mov dl, [rax+1]
+    test dl, dl
+    jnz .lib_zero
+    mov rax, 1
+    jmp .lib_done
+.lib_checktrue:
+    ;  "true" (4 символа + \0)
+    cmp byte [rax], 't'
+    jne .lib_zero
+    cmp byte [rax+1], 'r'
+    jne .lib_zero
+    cmp byte [rax+2], 'u'
+    jne .lib_zero
+    cmp byte [rax+3], 'e'
+    jne .lib_zero
+    mov rax, 1
+    jmp .lib_done
+.lib_zero:
+    xor rax, rax
+.lib_done:
+    mov rsp, rbp
+    pop rbp
+    ret
+
+;  ──────────────────────────────────────────────────────────────
+;  lang_input_char () → rax = первый байт строки (0 если пусто)
+;  ──────────────────────────────────────────────────────────────
+global lang_input_char
+lang_input_char:
+    push rbp
+    mov rbp, rsp
+    sub rsp, 16
+
+    call lang_input
+    movzx rax, byte [rax]
     mov rsp, rbp
     pop rbp
     ret

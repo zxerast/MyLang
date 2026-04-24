@@ -1,0 +1,14 @@
+struct Point { int x; int y; }
+struct Player { Point pos; }
+
+Player getPlayer() {}
+
+const int GER = 9;
+
+int main() {
+    // Цепочка: Вызов -> Поле -> Поле не сработает
+    int val = getPlayer().pos.x;
+    int[GER] = [1, 2, 3, 4, 5, 6, 7, 8, 9]; //  Не сработает
+
+    return 0;
+}

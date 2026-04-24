@@ -99,3 +99,35 @@ lang_strcat:
     mov rsp, rbp
     pop rbp
     ret
+
+;  ──────────────────────────────────────────────────────────────
+;  streq (rdi = a, rsi = b) → rax = 1 если строки равны, иначе 0.
+;  Безопасен к NULL — обе NULL считаем равными, одна NULL — не равны.
+;  ──────────────────────────────────────────────────────────────
+global lang_streq
+lang_streq:
+    test rdi, rdi
+    jnz .se_b
+    test rsi, rsi
+    jnz .se_neq
+    mov rax, 1
+    ret
+.se_b:
+    test rsi, rsi
+    jz .se_neq
+    xor rcx, rcx
+.se_loop:
+    mov al, [rdi + rcx]
+    mov dl, [rsi + rcx]
+    cmp al, dl
+    jne .se_neq
+    test al, al
+    jz .se_eq
+    inc rcx
+    jmp .se_loop
+.se_eq:
+    mov rax, 1
+    ret
+.se_neq:
+    xor rax, rax
+    ret
