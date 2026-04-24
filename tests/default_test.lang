@@ -1,0 +1,38 @@
+import <stdio.h>;
+
+struct Point {
+    int x = 10;
+    int y = 20;
+}
+
+int main(){
+    Point a = Point {};
+    print(a.x); 
+    print(a.y); 
+    print(" ");
+
+    Point.x = 4;
+    Point.y = 7;
+
+    Point b = Point {};
+    print(b.x); 
+    print(b.y); 
+    print("_");
+
+    // Форма без скобок — тоже должна применить текущие defaults
+    Point c = Point;
+
+    print(c.x);
+    print(c.y); 
+    print("_");
+
+    // Явное поле пересиливает default
+    Point d = Point { x: 99 };
+    print(d.x);
+    print(d.y); 
+    print("_");
+
+    print(Point.x);
+
+    return 0;
+}

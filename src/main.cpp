@@ -67,7 +67,10 @@ int main(int argc, char* argv[]){
 
     if (dumpTokens){
         for (const auto& t : *tokens){
-            std::cout << sourcePath << ":" << t.line << ":" << t.column << "\ttype=" << static_cast<int>(t.type) << "\tlexeme='" << t.lexeme << "'\n";
+            std::cout << sourcePath << ":" << t.line << ":" << t.column
+                      << "\ttype=" << static_cast<int>(t.type)
+                      << "\tsub=" << static_cast<int>(t.subType)
+                      << "\tlexeme='" << t.lexeme << "'\n";
         }
     }
 
@@ -92,7 +95,8 @@ int main(int argc, char* argv[]){
             else if (auto* n = dynamic_cast<NamespaceDecl*>(decl)) { kind = "NamespaceDecl"; name = n->name; }
             else if (auto* im = dynamic_cast<ImportDecl*>(decl)){ kind = "ImportDecl";    name = im->path; }
             else if (dynamic_cast<ExportDecl*>(decl))           { kind = "ExportDecl"; }
-            std::cout << sourcePath << ":" << decl->line << ":" << decl->column << "\t" << kind << "\t" << name << "\n";
+            std::cout << sourcePath << ":" << decl->line << ":" << decl->column
+                      << "\t" << kind << "\t" << name << "\n";
         }
     }
 

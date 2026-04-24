@@ -1,0 +1,34 @@
+// Тест деструкторов (проблема #12)
+class Resource {
+    int id = 0;
+
+    Resource(int x) {
+        id = x;
+        print("ctor", id);
+    };
+
+    ~Resource() {
+        print("dtor", id);
+    };
+}
+
+void scopeExit() {
+    Resource a = new Resource(1);
+    Resource b = new Resource(2);
+    // scope-exit: ожидаем dtor 1 и dtor 2
+}
+
+void explicitDelete() {
+    Resource r = new Resource(10);
+    delete r;   // dtor 10 + free
+    // scope-exit: r обнулён, дополнительного dtor не будет
+}
+
+int main() {
+    print("=== scopeExit ===");
+    scopeExit();
+    print("=== explicitDelete ===");
+    explicitDelete();
+    print("=== done ===");
+    return 0;
+}

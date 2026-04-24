@@ -6,21 +6,21 @@
 #include <memory>
 
 struct ASTNode{
-    int line = 0;
-    int column = 0;
+    int line = 0;       // Номер строки в исходнике (из токена)
+    int column = 0;     // Номер столбца (из токена)
     virtual ~ASTNode() = default;
 };
 
-struct Expr : ASTNode {
-    std::shared_ptr<Type> resolvedType;
+struct Expr : ASTNode {     //  Возвращает значение
+    std::shared_ptr<Type> resolvedType;  //  Тип, определённый семантическим анализатором
 };
-struct Stmt : ASTNode {};
+struct Stmt : ASTNode {};   //  Выполнят действие
 
 //  Выражения
 
 struct Number : Expr{
     double value;
-    bool isFloat = false;
+    bool isFloat = false;  //  true если литерал содержит точку
 };
 
 struct String : Expr{
@@ -30,12 +30,6 @@ struct String : Expr{
 struct Bool : Expr{
     bool value;
 };
-
-struct CharLit : Expr{
-    char value;
-};
-
-struct NullLit : Expr{};
 
 struct Identifier : Expr{
     std::string name;
@@ -52,30 +46,30 @@ enum class Operand{
 
 struct Binary : Expr{
     Operand op;
-    Expr* left = nullptr;
-    Expr* right = nullptr;
+    Expr *left;
+    Expr *right;
 };
 
 struct Unary : Expr{
     Operand op;
-    Expr* operand = nullptr;
+    Expr *operand;
 };
 
 struct FuncCall : Expr{
-    Expr* callee = nullptr;
+    Expr *callee;
     std::vector<Expr*> args;
-    bool isExternC = false;
-    bool isVariadic = false;
+    bool isExternC = false;   //  Вызов C-функции (без префикса lang_)
+    bool isVariadic = false;  //  C-вариадная (нужен xor eax, eax)
 };
 
 struct FieldAccess : Expr{
-    Expr* object = nullptr;
+    Expr *object;
     std::string field;
 };
 
 struct ArrayAccess : Expr{
-    Expr* object = nullptr;
-    Expr* index = nullptr;
+    Expr *object;
+    Expr *index;
 };
 
 struct ArrayLiteral : Expr{
@@ -84,7 +78,7 @@ struct ArrayLiteral : Expr{
 
 struct FieldInit{
     std::string name;
-    Expr* value = nullptr;
+    Expr *value;
 };
 
 struct StructLiteral : Expr{
@@ -94,24 +88,19 @@ struct StructLiteral : Expr{
 
 struct CastExpr : Expr{
     std::string targetType;
-    Expr* value = nullptr;
+    Expr *value;
 };
 
 struct NamespaceAccess : Expr{
-    std::string nameSpace;  // может быть "A::B" для вложенных
+    std::string nameSpace;
     std::string member;
-};
-
-struct NewExpr : Expr{
-    std::string className;
-    std::vector<Expr*> args;
 };
 
 //  Инструкции
 
 struct Assign : Stmt{
-    Expr* target = nullptr;
-    Expr* value = nullptr;
+    Expr *target;
+    Expr *value;
 };
 
 struct Block : Stmt{
@@ -119,14 +108,14 @@ struct Block : Stmt{
 };
 
 struct If : Stmt{
-    Expr* condition = nullptr;
-    Stmt* thenBranch = nullptr;
-    Stmt* elseBranch = nullptr;
+    Expr *condition;
+    Stmt *thenBranch;
+    Stmt *elseBranch;
 };
 
 struct While : Stmt{
-    Expr* condition = nullptr;
-    Stmt* body = nullptr;
+    Expr *condition;
+    Stmt *body;
 };
 
 struct Break : Stmt{};
@@ -134,45 +123,39 @@ struct Break : Stmt{};
 struct Continue : Stmt{};
 
 struct Return : Stmt{
-    Expr* value = nullptr;
+    Expr *value;
 };
 
 struct ExprStmt : Stmt{
-    Expr* expr = nullptr;
-};
-
-struct DeleteStmt : Stmt{
-    Expr* value = nullptr;
+    Expr *expr;
 };
 
 struct VarDecl : Stmt{
     bool isConst = false;
     bool isAuto = false;
-    std::string typeName;
+    std::string typeName;   // пустая при isAuto == true
     std::string name;
-    Expr* init = nullptr;
+    Expr *init = nullptr;
 };
 
-//  Объявления верхнего уровня
+//  Объявления верхнего уровня 
 
 struct Param{
     std::string typeName;
     std::string name;
-    Expr* defaultValue = nullptr;
-    bool isConst = false;
 };
 
 struct FuncDecl : Stmt{
     std::string returnType;
     std::string name;
     std::vector<Param> params;
-    Block* body = nullptr;
+    Block *body;
 };
 
 struct StructField{
     std::string typeName;
     std::string name;
-    Expr* defaultValue = nullptr;
+    Expr* defaultValue = nullptr;  //  Значение по умолчанию (может быть nullptr)
 };
 
 struct StructDecl : Stmt{
@@ -182,11 +165,21 @@ struct StructDecl : Stmt{
 
 struct ClassDecl : Stmt{
     std::string name;
-    std::vector<StructField> fields;
-    std::vector<FuncDecl*> methods;
-    std::vector<StructDecl*> nestedStructs;
-    FuncDecl* constructor = nullptr;
-    FuncDecl* destructor = nullptr;
+    std::vector<StructField> fields;       //  Поля класса
+    std::vector<FuncDecl*> methods;        //  Методы
+    FuncDecl* constructor = nullptr;       //  Конструктор (имя = имя класса)
+    FuncDecl* destructor = nullptr;        //  Деструктор (~имя класса)
+};
+
+//  new ClassName(args...)
+struct NewExpr : Expr{
+    std::string className;
+    std::vector<Expr*> args;
+};
+
+//  delete expr;
+struct DeleteStmt : Stmt{
+    Expr* value;
 };
 
 struct TypeAlias : Stmt{
@@ -200,17 +193,19 @@ struct NamespaceDecl : Stmt{
 };
 
 struct ImportDecl : Stmt{
-    std::string path;
-    bool isC = false;
+    std::string path;   // "math.lang" или "stdio.h"
+    bool isC = false;   // true для import <header.h>
 };
 
 struct ExportDecl : Stmt{
-    Stmt* decl = nullptr;
+    Stmt *decl;         // обёрнутое объявление
 };
 
 struct Program : ASTNode{
     std::vector<Stmt*> imports;
     std::vector<Stmt*> decls;
 };
+
+// Функции
 
 std::expected<std::vector<Stmt*>, std::string> parse(const std::vector<Token>& source, const std::string& filePath = "<source>");

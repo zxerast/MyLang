@@ -1,0 +1,108 @@
+import <stdio.h>;
+
+struct Pair{
+    int num;
+    string name;
+}
+
+class MyClass {
+    Pair p = Pair{};
+    Pair[] arr;
+
+    void Add(int x, string y){
+        p.num = x;
+        p.name = y;
+        push(arr, p);
+        p = Pair{};
+    };
+
+    int GetPos(int i){
+        return(arr[i].num);
+    }
+
+    void Print(){
+        int i = 0;
+        while(i < len(arr)){
+            auto curr = arr[i];
+            print(curr.num, "->", curr.name);
+            i++;
+        };
+    };
+}
+
+int main(){
+    MyClass obj = new MyClass();
+
+    obj.Add(1, "Me");
+    obj.Add(2, "You");
+    obj.Add(3, "Him");
+
+    obj.Print();
+
+    MyClass.Print();
+
+    int[] s = [10, 20, 30];
+    int i = 0;
+    
+    while(i < len(s)){
+        print(s[i]);
+        i++;
+    }
+
+    print(s);
+
+    string a = "Hello";
+    string b = a + " World ";
+    char c = "!";
+    print(b + c);
+
+    print(9 / 0);   //  Выводит float point exception
+
+    int[] der;
+    int f = pop(der);   //  Выводит сообщение рантайма
+
+    test(5);
+
+    string R = input();
+    print(R);
+
+    print(testClass(obj.GetPos(1)));
+    print(testClass(obj.GetPos));   //  Почему-то не даёт ошибки
+
+    return 0;
+}
+
+void test(float x){
+    type Terr = float;  //  Type не работает
+    Terr y = x;
+    int z = y;
+
+    type NumArr = int[];    
+    type PointAtt = Pair;
+
+    string a = "Hello";
+    string b = "Hello";
+
+    if(a == b){
+        print("true\n");
+    }
+
+    a = input();
+    b = input();
+
+    if(a == b){     //  Здесь всегда  false
+        print("true");
+    }
+    else{
+        print("false");
+    }
+
+    return;
+}
+
+bool testClass(int E){
+    if(E != 0){
+        return true;
+    }
+    return false;
+}

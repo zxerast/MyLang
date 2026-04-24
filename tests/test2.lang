@@ -1,0 +1,37 @@
+struct Point {
+    int x;
+    int y;
+}
+
+int main() {
+    // struct literal
+    Point p = Point { x: 5, y: 10 };
+    print(p.x);
+    print(p.y);
+
+    // while + continue + break
+    int i = 0;
+    while (i < 10) {
+        i = i + 1;
+        if (i % 2 == 0) {
+            continue;
+        }
+        if (i > 7) {
+            break;
+        }
+        print(i);
+    }
+
+    // cast
+    float f = cast<float>(42);
+    print(f);
+
+    // вложенные вызовы
+    print(square(5));
+
+    return 0;
+}
+
+int square(int n) {
+    return n * n;
+}

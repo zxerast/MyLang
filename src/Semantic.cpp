@@ -140,29 +140,13 @@ static bool isImplicitlyConvertible(const std::shared_ptr<Type>& from, const std
     if (isIntType(from) && to->kind == TypeKind::Float64)
         return true;
 
-    //  Array -> DynArray
+    //  Array -> DynArray 
     //  Позволяет: int[] arr = [1, 2, 3];  и  int[][] m = [[1, 2], [3, 4]];
     //  Рекурсивно проверяем элементы (для вложенных массивов)
     if (from->kind == TypeKind::Array && to->kind == TypeKind::DynArray)
         return from->elementType && to->elementType && isImplicitlyConvertible(from->elementType, to->elementType);
 
     return false;
-}
-
-//  Если представление int и float различается на уровне битов — оборачиваем выражение
-//  в CastExpr, чтобы codegen эмитнул cvtsi2sd. Для int→int (все qword'ом) инструкции не нужны.
-static void insertImplicitConv(Expr*& slot, const std::shared_ptr<Type>& from, const std::shared_ptr<Type>& to) {
-    if (!slot || !from || !to) return;
-    bool fromInt = isIntType(from);
-    bool toFloat = isFloatType(to);
-    if (!(fromInt && toFloat)) return;
-    auto* cast = new CastExpr();
-    cast->value = slot;
-    cast->targetType = typeToString(to);
-    cast->line = slot->line;
-    cast->column = slot->column;
-    cast->resolvedType = to;
-    slot = cast;
 }
 
 //  Проверяет допустимость явного приведения cast<To>(from)
@@ -605,9 +589,6 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
                     if (argTypes[j] && methodInfo->params[j].second && !isImplicitlyConvertible(argTypes[j], methodInfo->params[j].second)) {
                         error(expr->line, expr->column, "method '" + fieldCallee->field + "' argument " + std::to_string(j + 1) + ": cannot convert '" + typeToString(argTypes[j]) + "' to '" + typeToString(methodInfo->params[j].second) + "'");
                     }   //  Если переданные параметры не конвертируются в заданные
-                    else if (argTypes[j] && methodInfo->params[j].second && j < call->args.size()) {
-                        insertImplicitConv(call->args[j], argTypes[j], methodInfo->params[j].second);
-                    }
                 }
             }
 
@@ -643,22 +624,6 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
                 expectedArg = sym->funcInfo->params[i].second;  //  print/len/push/pop — особые случаи, проверяются отдельно
             }
             argTypes.push_back(analyzeExpr(call->args[i], expectedArg));
-        }
-
-        //  input() — контекстная типизация: возвращаемый тип берётся из expected
-        //  (int*, uint*, float*, bool, char, string). Без контекста → string.
-        if (callee->name == "input") {
-            if (!argTypes.empty()) {
-                error(expr->line, expr->column, "'input' expects 0 arguments, got " + std::to_string(argTypes.size()));
-            }
-            std::shared_ptr<Type> rt = makeType(TypeKind::String);
-            if (expected) {
-                auto k = expected->kind;
-                bool isSupported = (isIntType(expected) || isFloatType(expected) || k == TypeKind::Bool || k == TypeKind::Char || k == TypeKind::String);
-                if (isSupported) rt = expected;
-            }
-            expr->resolvedType = rt;
-            return expr->resolvedType;
         }
 
         //  print(x1, x2, ...) — 1+ аргументов примитивного типа или строк, выводятся через пробел
@@ -737,11 +702,8 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             }
             else {  //  Типы фиксированных параметров
                 for (size_t j = 0; j < fixed; j++) {
-                    if (argTypes[j] && sym->funcInfo->params[j].second && !isImplicitlyConvertible(argTypes[j], sym->funcInfo->params[j].second)) {
+                    if (argTypes[j] && sym->funcInfo->params[j].second && !typesEqual(argTypes[j], sym->funcInfo->params[j].second)) {
                         error(expr->line, expr->column, "argument " + std::to_string(j + 1) + " of '" + callee->name + "': expected '" + typeToString(sym->funcInfo->params[j].second) + "', got '" + typeToString(argTypes[j]) + "'");
-                    }
-                    else if (argTypes[j] && sym->funcInfo->params[j].second && j < call->args.size()) {
-                        insertImplicitConv(call->args[j], argTypes[j], sym->funcInfo->params[j].second);
                     }
                 }
             }
@@ -868,11 +830,8 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
                 for (auto& [fieldName, fieldType] : sym->structInfo->fields) {  //  Ищем поле с таким именем в определении структуры
                     if (fieldName == init.name) {
                         found = true;
-                        if (valType && fieldType && !isImplicitlyConvertible(valType, fieldType)) {  //  Проверяем совместимость типов
+                        if (valType && fieldType && !typesEqual(valType, fieldType)) {  //  Проверяем совместимость типов
                             error(expr->line, expr->column, "field '" + init.name + "' of '" + structLit->name + "': expected '" + typeToString(fieldType) + "', got '" + typeToString(valType) + "'");
-                        }
-                        else if (valType && fieldType) {
-                            insertImplicitConv(init.value, valType, fieldType);
                         }
                         break;
                     }
@@ -951,9 +910,6 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
                     if (!isImplicitlyConvertible(argType, constructorParams[j].second)) {
                         error(expr->line, expr->column, "constructor argument " + std::to_string(j + 1) + ": cannot convert '" + typeToString(argType) + "' to '" + typeToString(constructorParams[j].second) + "'");
                     }
-                    else {
-                        insertImplicitConv(newExpr->args[j], argType, constructorParams[j].second);
-                    }
                 }
             }
         } 
@@ -971,13 +927,6 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
     }
 
     return nullptr;
-}
-
-static bool isLvalue(Expr* expr) {
-    if (dynamic_cast<Identifier*>(expr)) return true;
-    if (dynamic_cast<FieldAccess*>(expr)) return true;
-    if (dynamic_cast<ArrayAccess*>(expr)) return true;
-    return false;
 }
 
 static bool alwaysReturns(Stmt* stmt) { //  Проверяет, что инструкция гарантированно завершается return
@@ -1051,9 +1000,6 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
                     if (defType && fieldType && !isImplicitlyConvertible(defType, fieldType)) {
                         error(decl->line, decl->column, "default value of field '" + field.name + "' in struct '" + structDecl->name
                             + "': cannot convert '" + typeToString(defType) + "' to '" + typeToString(fieldType) + "'");
-                    }
-                    else if (defType && fieldType) {
-                        insertImplicitConv(field.defaultValue, defType, fieldType);
                     }
                 }
             }
@@ -1205,9 +1151,6 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                 if (!isImplicitlyConvertible(initType, sym->type)) {
                     error(stmt->line, stmt->column, "cannot initialize '" + var->name + "' of type '" + typeToString(sym->type) + "' with '" + typeToString(initType) + "'");
                 }
-                else {
-                    insertImplicitConv(var->init, initType, sym->type);
-                }
             }
         }
 
@@ -1241,17 +1184,9 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                         error(stmt->line, stmt->column, "cannot redefine default of '" + id->name + "." + fa->field
                             + "': expected '" + typeToString(fieldType) + "', got '" + typeToString(valType) + "'");
                     }
-                    else if (valType) {
-                        insertImplicitConv(assign->value, valType, fieldType);
-                    }
                     return;
                 }
             }
-        }
-
-        if (!isLvalue(assign->target)) {
-            error(assign->target->line, assign->target->column, "invalid assignment target: expression is not assignable");
-            return;
         }
 
         auto targetType = analyzeExpr(assign->target);
@@ -1267,12 +1202,9 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             }
         }
 
-        if (targetType && valueType) {  //  Проверяем совместимость типов
+        if (targetType && valueType) {  //  Проверяем совместимость типов 
             if (!isImplicitlyConvertible(valueType, targetType)) {
                 error(stmt->line, stmt->column, "type mismatch in assignment: cannot assign '" + typeToString(valueType) + "' to '" + typeToString(targetType) + "'");
-            }
-            else {
-                insertImplicitConv(assign->value, valueType, targetType);
             }
         }
     }
@@ -1311,9 +1243,6 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             if (valType && currentReturnType) {
                 if (!isImplicitlyConvertible(valType, currentReturnType)) {
                     error(stmt->line, stmt->column, "return type mismatch: expected '" + typeToString(currentReturnType) + "', got '" + typeToString(valType) + "'");
-                }
-                else {
-                    insertImplicitConv(ret->value, valType, currentReturnType);
                 }
             }
         } 
@@ -1374,23 +1303,8 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
     else if (dynamic_cast<StructDecl*>(stmt)) {
         //  Уже зарегистрирован в collectTopLevel — пропускаем
     }
-    else if (auto* alias = dynamic_cast<TypeAlias*>(stmt)) {
-        //  На top-level уже зарегистрирован в collectTopLevel. Внутри функции
-        //  (или любого вложенного scope) регистрируем лениво, поскольку
-        //  collectTopLevel обходит только декларации верхнего уровня.
-        if (!table.resolve(alias->alias)) {
-            auto sym = std::make_shared<Symbol>();
-            sym->name = alias->alias;
-            sym->kind = SymbolKind::TypeAlias;
-            sym->type = resolveTypeName(alias->original);
-            if (!sym->type) {
-                error(stmt->line, stmt->column, "unknown type '" + alias->original + "' in type alias '" + alias->alias + "'");
-            }
-            auto result = table.declare(sym);
-            if (!result) {
-                error(stmt->line, stmt->column, result.error());
-            }
-        }
+    else if (dynamic_cast<TypeAlias*>(stmt)) {
+        //  Уже зарегистрирован в collectTopLevel — пропускаем
     }
     else if (auto* clas = dynamic_cast<ClassDecl*>(stmt)) {  //  Объявление класса
         auto classSym = table.resolve(clas->name);

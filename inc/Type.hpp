@@ -11,8 +11,8 @@ enum class TypeKind {
     Char,
     String,
     Void,
-    Array,      // T[N]
-    DynArray,   // T[]
+    Array,      // [T; N]
+    DynArray,   // [T]
     Struct,
     Class,
     Alias,
@@ -20,7 +20,13 @@ enum class TypeKind {
 
 struct Type {
     TypeKind kind;
-    std::shared_ptr<Type> elementType = nullptr;    // Array / DynArray — тип элемента
-    int arraySize = -1;     // Array — размер
-    std::string name;       // Struct / Alias — имя
+
+    // Array / DynArray — тип элемента
+    std::shared_ptr<Type> elementType = nullptr;
+
+    // Array — размер
+    int arraySize = -1;
+
+    // Struct / Alias — имя
+    std::string name;
 };

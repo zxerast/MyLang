@@ -33,7 +33,6 @@ class CodeGen {     //  Буферы секций — собираем в них
     std::unordered_map<std::string, LocalVar> locals;   //  Локальные переменные функции (имя -> тип+смещение)
     int currentFrameSize = 0;       //  Сколько байт выделено в текущем фрейме
     std::string currentEndLabel; //  Метка конца функции для return
-    std::string currentReturnType; //  Имя возвращаемого типа текущей функции (для DynArray ABI)
     std::vector<LoopLabels> loopStack;  //  Метки break и continue
 
     //  Классовые локалки текущей функции — порядок объявления, для scope-exit вызова деструкторов.

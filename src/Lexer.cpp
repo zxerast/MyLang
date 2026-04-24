@@ -6,115 +6,112 @@
 
 Token typeIdentifier(const std::string& elem){
     if (elem == "int"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Int, elem};
     }
     else if (elem == "uint"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Uint, elem};
     }
     else if (elem == "char"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Char, elem};
     }
     else if (elem == "float"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Float, elem};
     }
     else if (elem == "bool"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Bool, elem};
     }
     else if (elem == "string"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::String, elem};
     }
     else if (elem == "void"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Void, elem};
     }
     else if (elem == "int8"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Int8, elem};
     }
     else if (elem == "int16"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Int16, elem};
     }
     else if (elem == "int32"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Int32, elem};
     }
     else if (elem == "int64"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Int64, elem};
     }
     else if (elem == "uint8"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Uint8, elem};
     }
     else if (elem == "uint16"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Uint16, elem};
     }
     else if (elem == "uint32"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Uint32, elem};
     }
     else if (elem == "uint64"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Uint64, elem};
     }
     else if (elem == "float32"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Float32, elem};
     }
     else if (elem == "float64"){
-        return {TokenType::TypeName, elem};
+        return {TokenType::TypeName, SubType::Float64, elem};
     }
     else if (elem == "if"){
-        return {TokenType::If,   elem};
+        return {TokenType::If, SubType::None, elem};
     }
     else if (elem == "else"){
-        return {TokenType::Else,   elem};
+        return {TokenType::Else, SubType::None, elem};
     }
     else if (elem == "while"){
-        return {TokenType::While,   elem};
+        return {TokenType::While, SubType::None, elem};
     }
     else if (elem == "break"){
-        return {TokenType::Break,   elem};
+        return {TokenType::Break, SubType::None, elem};
     }
     else if (elem == "const"){
-        return {TokenType::Const,   elem};
+        return {TokenType::Const, SubType::None, elem};
     }
     else if (elem == "struct"){
-        return {TokenType::Struct,   elem};
+        return {TokenType::Struct, SubType::None, elem};
     }
     else if (elem == "continue"){
-        return {TokenType::Continue,   elem};
+        return {TokenType::Continue, SubType::None, elem};
     }
     else if (elem == "return"){
-        return {TokenType::Return,   elem};
+        return {TokenType::Return, SubType::None, elem};
     }
     else if (elem == "type"){
-        return {TokenType::Type,   elem};
+        return {TokenType::Type, SubType::None, elem};
     }
     else if (elem == "namespace"){
-        return {TokenType::Namespace,   elem};
+        return {TokenType::Namespace, SubType::None, elem};
     }
     else if (elem == "cast"){
-        return {TokenType::Cast,   elem};
+        return {TokenType::Cast, SubType::None, elem};
     }
     else if (elem == "auto"){
-        return {TokenType::Auto,   elem};
+        return {TokenType::Auto, SubType::None, elem};
     }
     else if (elem == "import"){
-        return {TokenType::Import,   elem};
+        return {TokenType::Import, SubType::None, elem};
     }
     else if (elem == "export"){
-        return {TokenType::Export,   elem};
+        return {TokenType::Export, SubType::None, elem};
     }
     else if (elem == "class"){
-        return {TokenType::Class,   elem};
+        return {TokenType::Class, SubType::None, elem};
     }
     else if (elem == "new"){
-        return {TokenType::New, elem};
+        return {TokenType::New, SubType::None, elem};
     }
     else if (elem == "delete"){
-        return {TokenType::Delete, elem};
-    }
-    else if (elem == "null"){
-        return {TokenType::Null, elem};
+        return {TokenType::Delete, SubType::None, elem};
     }
     else if (elem == "true" || elem == "false"){
-        return {TokenType::BoolLit,   elem};
+        return {TokenType::BoolLit, SubType::None, elem};
     }
     else{
-        return {TokenType::Iden,   elem};
+        return {TokenType::Iden, SubType::None, elem};
     }
 }
 
@@ -133,24 +130,8 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
             case '\t':
             case '\r': break;
             case '\n': line++; lineStart = i + 1; break;
-            case '*':
-                if (i + 1 < source.size() && source[i + 1] == '='){
-                    res.emplace_back(TokenType::MulEqual, std::string("*="));
-                    i++;
-                }
-                else{
-                    res.emplace_back(TokenType::Multiply, std::string(1,  '*'));
-                }
-                break;
-            case '%':
-                if (i + 1 < source.size() && source[i + 1] == '='){
-                    res.emplace_back(TokenType::ModEqual, std::string("%="));
-                    i++;
-                }
-                else{
-                    res.emplace_back(TokenType::Modulo, std::string(1, '%'));
-                }
-                break;
+            case '*': res.emplace_back(TokenType::Multiply, std::string(1,  '*')); break;
+            case '%': res.emplace_back(TokenType::Modulo, std::string(1, '%')); break;
             case '(': res.emplace_back(TokenType::LeftParen, std::string(1, '(')); break;
             case ')': res.emplace_back(TokenType::RightParen, std::string(1, ')')); break;
             case '{': res.emplace_back(TokenType::LeftBrace, std::string(1, '{')); break;
@@ -166,21 +147,17 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
                     res.emplace_back(TokenType::PlusPlus, std::string("++"));
                     i++;
                 }
-                else if (i + 1 < source.size() && source[i + 1] == '='){
-                    res.emplace_back(TokenType::PlusEqual, std::string("+="));
-                    i++;
-                }
                 else{
                     res.emplace_back(TokenType::Plus, std::string(1, '+'));
                 }
                 break;
             case '-':
-                if (i + 1 < source.size() && source[i + 1] == '-'){
-                    res.emplace_back(TokenType::MinusMinus, std::string("--"));
+                if (i + 1 < source.size() && source[i + 1] == '>'){
+                    res.emplace_back(TokenType::Arrow, std::string("->"));
                     i++;
                 }
-                else if (i + 1 < source.size() && source[i + 1] == '='){
-                    res.emplace_back(TokenType::MinusEqual, std::string("-="));
+                else if (i + 1 < source.size() && source[i + 1] == '-'){
+                    res.emplace_back(TokenType::MinusMinus, std::string("--"));
                     i++;
                 }
                 else{
@@ -193,10 +170,6 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
                         i++;
                     }
                     i--;
-                }
-                else if (i + 1 < source.size() && source[i + 1] == '='){
-                    res.emplace_back(TokenType::DivEqual, std::string("/="));
-                    i++;
                 }
                 else{
                     res.emplace_back(TokenType::Divide, std::string(1, '/'));
@@ -268,35 +241,6 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
             case '~':
                 res.emplace_back(TokenType::Tilde, std::string(1, '~'));
                 break;
-            case '\'': {
-                i++;
-                if (i >= source.size() || source[i] == '\n' || source[i] == '\''){
-                    return std::unexpected(filePath + ":" + std::to_string(startLine) + ":" + std::to_string(startCol) + ": error: empty or unterminated character literal");
-                }
-                char ch;
-                if (source[i] == '\\' && i + 1 < source.size()){
-                    char esc = source[i + 1];
-                    if      (esc == 'n')  ch = '\n';
-                    else if (esc == 't')  ch = '\t';
-                    else if (esc == 'r')  ch = '\r';
-                    else if (esc == '0')  ch = '\0';
-                    else if (esc == '\\') ch = '\\';
-                    else if (esc == '"')  ch = '"';
-                    else if (esc == '\'') ch = '\'';
-                    else {
-                        return std::unexpected(filePath + ":" + std::to_string(startLine) + ":" + std::to_string(startCol) + ": error: unknown escape sequence '\\" + std::string(1, esc) + "'");
-                    }
-                    i += 2;
-                }
-                else{
-                    ch = source[i++];
-                }
-                if (i >= source.size() || source[i] != '\''){
-                    return std::unexpected(filePath + ":" + std::to_string(startLine) + ":" + std::to_string(startCol) + ": error: unterminated character literal");
-                }
-                res.emplace_back(TokenType::CharLit, std::string(1, ch));
-                break;
-            }
             case '"': {
                 std::string str;
                 i++;
@@ -335,20 +279,11 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
                     res.emplace_back(typeIdentifier(elem));
                 }
                 else if (isdigit(source[i])){
-                    //  Hex-литерал: 0x...
-                    if (source[i] == '0' && i + 1 < source.size() && (source[i + 1] == 'x' || source[i + 1] == 'X')){
-                        elem.push_back(source[i++]); // '0'
-                        elem.push_back(source[i++]); // 'x'
-                        while (i < source.size() && isxdigit(source[i])){
-                            elem.push_back(source[i++]);
-                        }
-                        i--;
-                        unsigned long long hexVal = std::stoull(elem.substr(2), nullptr, 16);
-                        res.emplace_back(TokenType::Number, std::to_string(hexVal));
-                        break;
-                    }
+                    SubType type = SubType::None;
+
                     while (i < source.size() && (isdigit(source[i]) || source[i] == '.')){
                         if (source[i] == '.'){
+                            type = SubType::Float;
                             if (!isdigit(source[i - 1])){
                                 return std::unexpected(filePath + ":" + std::to_string(startLine) + ":" + std::to_string(startCol) + ": error: malformed floating-point literal");
                             }
@@ -363,7 +298,7 @@ std::expected<std::vector<Token>, std::string> tokenize(const std::string& sourc
                         elem.push_back(source[i++]);
                     }
                     i--;
-                    res.emplace_back(TokenType::Number, elem);
+                    res.emplace_back(TokenType::Number, type, elem);
                 }
                 else{
                     return std::unexpected(filePath + ":" + std::to_string(startLine) + ":" + std::to_string(startCol) + ": error: unexpected character '" + std::string(1, source[i]) + "'");

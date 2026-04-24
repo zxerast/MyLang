@@ -51,8 +51,7 @@ float_lit = digit { digit } "." digit { digit }
 ### Строковые литералы
 
 ```
-string_lit = { любой символ кроме '"' и '\n' } 
-char_lit = "'" {любой символ кроме "'" и '\n' длины 1} "'" 
+string_lit = '"' { любой символ кроме '"' и '\n' } '"'
 ```
 
 ### Булевы литералы
@@ -66,7 +65,7 @@ bool_lit = "true" | "false"
 ```
 const | struct | type | namespace
 if | else | while | break | continue | return
-auto | import | export | class 
+auto | import | export
 ```
 
 ### Имена типов (зарезервированы)
@@ -103,17 +102,15 @@ program = { import_decl } { top_decl }
 ### Импорт модулей
 
 ```
-import_decl = ("import"  '"' string_lit '"' | "import" '<' string_lit '>') 
+import_decl = "import" string_lit ";"
 ```
 
 Импорт должен находиться в начале файла, до любых объявлений.
-Случай с '"' импорт файла на таком же языке, случай с '<' импорт C библиотеки
 
 Пример:
 ```
-import "math.lang"
-import "utils.lang"
-import <stdio.h>
+import "math.lang";
+import "utils.lang";
 ```
 
 ### Объявления верхнего уровня
@@ -123,7 +120,6 @@ top_decl = [ "export" ] ( var_decl
                         | func_decl
                         | struct_decl
                         | type_alias
-                        | class_decl
                         | namespace_decl )
 ```
 
@@ -132,7 +128,7 @@ top_decl = [ "export" ] ( var_decl
 ### Объявление переменной
 
 ```
-var_decl = [ "const" ] ( type | "auto" ) iden "=" expr {"," iden "=" expr} ";"
+var_decl = [ "const" ] ( type | "auto" ) iden "=" expr ";"
 ```
 
 При использовании `auto` тип выводится из выражения инициализации. `auto` требует обязательного инициализатора.
@@ -140,7 +136,6 @@ var_decl = [ "const" ] ( type | "auto" ) iden "=" expr {"," iden "=" expr} ";"
 Примеры:
 ```
 int x = 5;
-int y = 3, z = 4;
 const int MAX = 100;
 float ratio = 0.5;
 auto name = "hello";       // выведен тип string
@@ -153,62 +148,27 @@ const auto PI = 3.14;      // выведен тип float, переменная 
 ```
 func_decl = type iden "(" [ param_list ] ")" "{" block "}"  
 param_list = param { "," param }
-param      = [ "const" ] type iden ["=" expr]   //  Возможно значение по умолчанию
+param      = type iden
 ```
 
 Примеры:
 ```
-int add(int a, int b) { 
-    return a + b;
-}
+int add(int a, int b) { return a + b; }
 void print_sum(int a, int b) { ... }
-float point(int a = 3, int b) { ... }
 ```
 
 ### Объявление структуры
 
 ```
 struct_decl = "struct" iden "{" { struct_field } "}"
-struct_field = type iden ["=" expr] ";"
+struct_field = type iden ";"
 ```
 
 Пример:
 ```
 struct Point {
-    int x = 3;  //  Значение по умолчанию
-    int y;
-}
-```
-### Объявление класса
-
-```
-class_decl = "class" class_name "{" {struct_field} 
-                                    [class_name "(" [param_list] ")" "{" block "}"]
-                                    {struct_decl}
-                                    {func_decl}
-                                    ["~" class_name "()" "{" block "}"]"}"
-class_name = iden
-```
-Пример:
-```
-class MyClass {
     int x;
-    int y = 4;
-
-    MyClass(int val){
-        x = val;
-    }
-
-    struct Elem {
-        float der;
-        string fer = 8;
-    }
-
-    int method(int a, int b = 7){
-        return (a + b) / x;
-    }
-
-    ~MyClass() {}
+    int y;
 }
 ```
 
@@ -255,25 +215,18 @@ builtin_type = "int"   | "uint"   | "float" | "bool"
              | "uint8" | "uint16" | "uint32"| "uint64"
              | "float32" | "float64"
 
-array_type     = type "[" expr "]"  (фиксированный массив)
-dyn_array_type = type "[]" {"[]"}   (динамический массив)
+array_type     = "[" type ";" int_lit "]"    (фиксированный массив)
+dyn_array_type = "[" type "]"                (динамический массив)
 ```
 
 Примеры типов:
 ```
 int
 float64
-string
-int[10]         // фиксированный массив из 10 int
-float[size]     // фиксированный массив из size элементов float
-int[]           // динамический массив int
-string[]        // динамический массив строк
-int[][]         // двойной динамический массив(динамическая матрица)
-int[3][4]       // массив размера 3 у которого элементы это массивы размера 4
-int[][2]        // динамический массив хранящий пары
-int[][][]       // тройной массив
-Point           // структурный тип
-Point[]         // массив хранящий структуры
+[int; 10]       // фиксированный массив из 10 int
+[int]           // динамический массив int
+[string]        // динамический массив строк
+Point
 ```
 
 ---
@@ -301,7 +254,6 @@ assign_stmt = lvalue "=" expr ";"
 lvalue = iden
        | lvalue "." iden
        | lvalue "[" expr "]"
-       | lvalue
 ```
 
 #### Ветвление
@@ -335,7 +287,7 @@ return_stmt = "return" [ expr ] ";"
 expr_stmt = expr ";"
 ```
 
-Допускается вызов функции:
+Допускается только вызов функции:
 ```
 print(x);
 ```
@@ -364,25 +316,23 @@ block = { stmt }
 |    8    | постфиксные `.` `[]` `()` `++` `--` |      левая      |
 
 ```
-expr     = assign
-assign   = or [ ( "=", "+=", "-=", "*=", "/=", "%=" ) assign]
+expr     = or
 or       = and { "||" and }
 and      = equality { "&&" equality }
 equality = compare { ( "==" | "!=" ) compare }
 compare  = add { ( "<" | ">" | "<=" | ">=" ) add }
 add      = mul { ( "+" | "-" ) mul }
 mul      = unary { ( "*" | "/" | "%" ) unary }
-unary    = ( "+" | "-" | "!" | "++" | "--") unary | postfix
+unary    = ( "!" | "-" ) unary | postfix
 postfix  = primary { "." iden | "[" expr "]" | "(" [ arg_list ] ")" | "++" | "--" }
 
 primary  = int_lit
          | float_lit
-         | '"' string_lit '"'
+         | string_lit
          | bool_lit
+         | iden "::" iden                          (доступ к namespace — разрешается по "::" после iden)
+         | iden "{" [ field_init_list ] "}"        (литерал структуры — разрешается по "{" после iden)
          | iden                                    (простой идентификатор — если после iden нет "::" и "{")
-         | "null"
-         | iden {"::" iden}                        (доступ к namespace — разрешается по "::" после iden)
-         | iden {"::" iden} "{" [ field_init_list ] "}" (литерал структуры — разрешается по "{" после iden)
          | "[" [ expr { "," expr } ] "]"           (литерал массива)
          | "(" expr ")"
          | cast_expr
@@ -396,8 +346,6 @@ field_init_list = iden ":" expr { "," iden ":" expr }
 Примеры выражений:
 ```
 x + y * 2
-(x - y) + z
-"Hello" + "world!"
 arr[i]
 p.x
 add(1, 2)
@@ -405,8 +353,4 @@ Point { x: 1, y: 2 }
 [1, 2, 3]
 cast<float>(x)
 Math::PI_INT
-Math::Add::PI_FLOAT
-arr[i].method(2)
-method()[0]
-func(x).method(y)
 ```
