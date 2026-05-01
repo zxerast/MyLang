@@ -1,0 +1,41 @@
+int main() {
+    Inventory inv = Inventory(10);
+
+    Inventory::Slot s1 = inv.makeSlot(1, 5);
+    Inventory::Slot s2 = inv.makeSlot(2, 7);
+
+    Inventory::Slot[2] slots = [s1, s2];
+
+    int result = inv.score(slots[0]) + inv.score(slots[1]);
+
+    print("TEST 5 OK", slots[0].id, slots[0].count, slots[1].id, slots[1].count, result);
+
+    return result;
+}
+
+class Inventory {
+    int multiplier;
+
+    Inventory(int m) {
+        multiplier = m;
+    }
+
+    struct Slot {
+        int id;
+        int count;
+    }
+
+    Slot makeSlot(int id, int count) {
+        return Slot { id: id, count: count };
+    }
+
+    int score(Slot s) {
+        return s.id * multiplier + s.count;
+    }
+}
+
+//  Runtime output:
+//  TEST 5 OK 1 5 2 7 42
+//  runtime_exit=42
+
+//  Status: OK

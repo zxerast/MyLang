@@ -1,0 +1,21 @@
+int main() {
+    int a = 10;
+    int b = 20;
+    int c = 10;
+
+    bool r1 = a < b;
+    bool r2 = b > a;
+    bool r3 = a <= c;
+    bool r4 = b >= c;
+    bool r5 = a == c;
+    bool r6 = a != b;
+
+    bool complex = r1 && r2 || false && r5;
+    bool grouped = r1 && (r2 || false) && r3 && r4 && r5 && r6;
+
+    print("TEST 4 OK", r1, r2, r3, r4, r5, r6, complex, grouped);
+
+    return 0;
+}
+
+//  Status: OK

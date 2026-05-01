@@ -1,0 +1,14 @@
+import "test100_secret.lang"
+
+int main() {
+    int a = publicValue();
+    int b = privateValue();
+
+    print("SHOULD NOT RUN", a, b);
+
+    return a + b;
+}
+
+//  test100.lang:5:13: error: 'privateValue' is not declared
+
+//  Status: non-exported name is not visible -> OK

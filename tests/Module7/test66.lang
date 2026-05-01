@@ -1,0 +1,15 @@
+int main() {
+    int x = id(10);
+
+    print("SHOULD NOT RUN", x);
+
+    return 0;
+}
+
+int id(auto x) {
+    return x;
+}
+
+//  test66.lang:9:14: error: auto parameter requires default value
+
+//  Status: auto parameter requires default value -> OK

@@ -1,0 +1,45 @@
+int main() {
+    Counter a = Counter(10);
+
+    int r1 = a.get();
+    int r2 = a.add(5);
+    int r3 = a.add();
+
+    Counter b = a;
+    b.set(100);
+
+    int r4 = a.get();
+    int r5 = b.get();
+
+    int result = r1 + r2 + r3 + r4 + r5;
+
+    print("TEST 4 OK", r1, r2, r3, r4, r5, result);
+
+    return result;
+}
+
+class Counter {
+    int value;
+
+    Counter(int start) {
+        value = start;
+    }
+
+    int get() {
+        return value;
+    }
+
+    void set(int x) {
+        value = x;
+    }
+
+    int add(int x = 1) {
+        return value + x;
+    }
+}
+
+//  Runtime output:
+//  TEST 4 OK 10 15 11 100 100 236
+//  runtime_exit=236
+
+//  Status: OK

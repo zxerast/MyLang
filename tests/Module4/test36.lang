@@ -1,0 +1,18 @@
+int main() {
+    float64 f = 12.75;
+
+    int a = cast<int>(f);
+    int8 b = cast<int8>(f);
+
+    int x = 10;
+    float64 y = x;
+
+    float64 big = 3.1415926;
+    float32 small = cast<float32>(big);
+
+    print("TEST 6 OK", a, b, y, small);
+
+    return 0;
+}
+
+//  Status: OK

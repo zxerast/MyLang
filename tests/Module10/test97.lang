@@ -1,0 +1,40 @@
+int main() {
+    int value = 1000;
+
+    int a = Math::value;
+    int b = Math::Advanced::value;
+
+    int c = Math::calc(10);
+    int d = Math::Advanced::calc(10);
+
+    {
+        int Math = 999;
+        int local = Math;
+
+        print("TEST 7 INNER", local);
+    }
+
+    int result = value + a + b + c + d;
+
+    print("TEST 7 OK", value, a, b, c, d, result);
+
+    return result;
+}
+
+namespace Math {
+    int value = 1;
+
+    int calc(int x) {
+        return x + value;
+    }
+
+    namespace Advanced {
+        int value = 2;
+
+        int calc(int x) {
+            return x * value;
+        }
+    }
+}
+
+//  Status: OK

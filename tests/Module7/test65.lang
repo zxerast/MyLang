@@ -1,0 +1,21 @@
+int main() {
+    int a = inc();
+    int b = inc(20);
+
+    string s1 = join();
+    string s2 = join("X", "Y");
+
+    print("TEST 5 OK", a, b, s1, s2);
+
+    return a + b;
+}
+
+int inc(auto x = 10) {
+    return x + 1;
+}
+
+string join(auto a = "A", auto b = "B") {
+    return a + b;
+}
+
+//  Status: OK

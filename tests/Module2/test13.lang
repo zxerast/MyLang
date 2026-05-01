@@ -1,0 +1,16 @@
+int main() {
+    Point p = makePoint(3, 4);
+    print(p.x, p.y, p.x + p.y);
+    return p.x + p.y;
+}
+
+Point makePoint(int x, int y) {
+    return Point { x: x, y: y };
+}
+
+struct Point {
+    int x;
+    int y;
+}
+
+//  Status: OK

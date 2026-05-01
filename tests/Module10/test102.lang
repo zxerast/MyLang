@@ -1,0 +1,21 @@
+import <test102_c_helpers.h>
+
+int main() {
+    int[3] fixed = [10, 20, 30];
+
+    int a = first_int(fixed);
+
+    set_first_int(fixed, 999);
+
+    int b = fixed[0];
+
+    print("TEST 12 OK", a, b);
+
+    return a + b;
+}
+
+//  Runtime output:
+//  TEST 12 OK 10 999
+//  runtime_exit=241
+
+//  Status: NOT OK -> FIX !!!

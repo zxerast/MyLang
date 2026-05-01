@@ -1,0 +1,13 @@
+int main() {
+    const int LIMIT = 10;
+
+    LIMIT = 20;
+
+    print("SHOULD NOT RUN", LIMIT);
+
+    return 0;
+}
+
+//  test46.lang:4:5: error: cannot assign to const 'LIMIT'
+
+//  Status: cannot assign to const -> OK

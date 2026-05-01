@@ -1,0 +1,84 @@
+int main() {
+    Data::Item[4] items = [
+        Data::makeItem(1, 10),
+        Data::makeItem(2, 20),
+        Data::makeItem(3, 30),
+        Data::makeItem(4, 40)
+    ];
+
+    int i = 0;
+    int total = 0;
+
+    while (i < len(items)) {
+        Data::Item current = items[i];
+
+        if (current.id == 2) {
+            i++;
+            continue;
+        } else if (current.id == 4) {
+            break;
+        } else {
+            total = total + Data::score(current);
+        }
+
+        int j = 0;
+        while (j < 3) {
+            if (j == 1 && current.id == 3) {
+                j++;
+                continue;
+            }
+
+            total = total + j;
+
+            if (j == 2) {
+                break;
+            }
+
+            j++;
+        }
+
+        i++;
+    }
+
+    {
+        int total = total + 1000;
+        print("TEST 10 INNER", total);
+    }
+
+    print("TEST 10 OK", i, total);
+
+    return total;
+}
+
+namespace Data {
+    struct Item {
+        Small id;
+        int value;
+    }
+
+    Item makeItem(auto id = 0, int value = 0) {
+        return Item {
+            id: cast<Small>(id),
+            value: value
+        };
+    }
+
+    int score(Item item) {
+        if (item.value < 15) {
+            return item.value + 1;
+        } else if (item.value < 35) {
+            return item.value + 2;
+        } else {
+            return item.value + 3;
+        }
+    }
+}
+
+type Small = int8;
+
+//  Runtime output:
+//  TEST 10 INNER 1048
+//  TEST 10 OK 3 48
+//  runtime_exit=48
+
+//  Status: OK

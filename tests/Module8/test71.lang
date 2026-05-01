@@ -1,0 +1,24 @@
+int main() {
+    int a = 10;
+    int b = 20;
+
+    int result = 0;
+
+    if (a < b) {
+        result = result + 1;
+    } else {
+        result = result + 100;
+    }
+
+    if (a == b) {
+        result = result + 1000;
+    } else {
+        result = result + 2;
+    }
+
+    print("TEST 1 OK", result);
+
+    return result;
+}
+
+//  Status: OK

@@ -1,0 +1,18 @@
+int main() {
+    int64 big = 1000;
+    int8 a = cast<int8>(big);
+    int16 b = cast<int16>(big);
+
+    uint64 u = 300;
+    uint8 c = cast<uint8>(u);
+
+    int result = a + b + c;
+
+    print("TEST 3 OK", a, b, c, result);
+
+    return 0;
+}
+
+//  test33.lang:9:18: error: incompatible types in arithmetic: 'int16' and 'uint8'
+
+//  Status: NOT OK -> FIX !!!

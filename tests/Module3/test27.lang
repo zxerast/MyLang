@@ -1,0 +1,10 @@
+int main() {
+    string s = "123";
+    int x = s;
+
+    print("SHOULD NOT RUN", x);
+
+    return 0;
+}
+
+//  Status: cannot convert -> OK

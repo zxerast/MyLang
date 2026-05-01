@@ -1,0 +1,10 @@
+int main(){
+    return 0;
+}
+
+int main(){
+    return 0;
+}
+
+
+//  Status: redefenition of main -> OK

@@ -1,0 +1,18 @@
+int main() {
+    int[3] arr = [10, 20, 30];
+
+    print("TEST 6 BEFORE RUNTIME ERROR", len(arr));
+
+    int x = arr[3];
+
+    print("SHOULD NOT RUN", x);
+
+    return 0;
+}
+
+//  Runtime output:
+//  TEST 6 BEFORE RUNTIME ERROR 3
+//  runtime error: array index out of bounds at line 6
+//  runtime_exit=1
+
+//  Status: array index out of bounds -> OK

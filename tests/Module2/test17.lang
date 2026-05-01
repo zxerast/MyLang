@@ -1,0 +1,25 @@
+int main() {
+    Counter c = makeCounter(10);
+    print(c.get());
+    return c.get();
+}
+
+Counter makeCounter(int start) {
+    Counter c = Counter(start);
+    return c;
+}
+
+class Counter {
+    int value;
+
+    Counter(int start) {
+        value = start;
+    }
+
+    int get() {
+        return value;
+    }
+}
+
+
+//  Status: OK

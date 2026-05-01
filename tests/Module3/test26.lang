@@ -1,0 +1,15 @@
+int main() {
+    Meters distance = 100;
+    Seconds time = distance;
+
+    int result = time + 23;
+
+    print("TEST 6 OK", result);
+
+    return result;
+}
+
+type Meters = int;
+type Seconds = int;
+
+//  Status: OK

@@ -1,0 +1,13 @@
+int main() {
+    if (true) {
+        continue;
+    }
+
+    print("SHOULD NOT RUN");
+
+    return 0;
+}
+
+//  test79.lang:3:9: error: 'continue' outside of loop
+
+//  Status: continue outside loop -> OK

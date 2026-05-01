@@ -1,0 +1,11 @@
+int main() {
+    int[3] arr = [1, "bad", 3];
+
+    print("SHOULD NOT RUN", len(arr));
+
+    return 0;
+}
+
+//  test83.lang:2:22: error: array element 2: cannot convert 'string' to 'int32'
+
+//  Status: incompatible array element type -> OK

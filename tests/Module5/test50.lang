@@ -1,0 +1,48 @@
+int main() {
+    const auto base = 10;
+
+    Data::Point p = Data::makePoint(1, 2);
+
+    auto points = [
+        p,
+        Data::makePoint(3, 4),
+        Data::Point { x: cast<Small>(5), y: cast<Small>(6) }
+    ];
+
+    int result = base + points[0].x + points[1].y + points[2].x;
+
+    {
+        int result = 100;
+        auto local = Data::makePoint(cast<Small>(7), cast<Small>(8));
+
+        result = result + local.x + local.y;
+
+        print("TEST 10 INNER", result);
+    }
+
+    int result = result + 1;
+
+    print("TEST 10 OK", result);
+
+    return result;
+}
+
+namespace Data {
+    struct Point {
+        Small x;
+        Small y;
+    }
+
+    Point makePoint(Small x, Small y) {
+        return Point { x: x, y: y };
+    }
+}
+
+type Small = int8;
+
+//  Runtime output:
+//  TEST 10 INNER 115
+//  TEST 10 OK 1
+//  runtime_exit=1
+
+//  Status: OK

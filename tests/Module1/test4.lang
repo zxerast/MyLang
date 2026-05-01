@@ -1,0 +1,7 @@
+int main() {
+    auto s = "hello
+world";
+    return 0;
+}
+
+//  Status: unterminated string literal -> OK

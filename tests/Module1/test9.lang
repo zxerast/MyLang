@@ -1,0 +1,28 @@
+struct Inner {
+    int value;
+}
+
+struct Box {
+    Inner item;
+}
+
+Box makeBox() {
+    return Box { item: Inner { value: 98 } };
+}
+
+int main() {
+    int[3] arr = [1, 2, 3];
+
+    arr[0]++;
+    arr[1]--;
+    arr[2]++;
+
+    int x = makeBox().item.value;
+    print(arr);
+    print(x);
+    return arr[0] + arr[1] + x;
+}
+
+//  Wrong output: must be 2 1 4 have 1 2 3, postfix operators dont work
+
+//  Status: NOT OK -> FIX !!!

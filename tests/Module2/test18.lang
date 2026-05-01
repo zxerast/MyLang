@@ -1,0 +1,9 @@
+int x = 10;
+
+import "math.lang"
+
+int main() {
+    return x;
+}
+
+//  Status: import must appear before all declarations -> OK

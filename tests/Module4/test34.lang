@@ -1,0 +1,24 @@
+int main() {
+    int8 a = 42;
+    int16 b = 32000;
+    int64 c = 900000;
+
+    a = 7;
+
+    int r1 = takeInt8(100);
+    int r2 = returnInt8();
+
+    print("TEST 4 OK", a, b, c, r1, r2);
+
+    return 0;
+}
+
+int takeInt8(int8 x) {
+    return x;
+}
+
+int8 returnInt8() {
+    return 12;
+}
+
+//  Status: OK

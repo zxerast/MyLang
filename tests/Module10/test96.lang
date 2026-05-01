@@ -1,0 +1,13 @@
+int main() {
+    int x = 10;
+
+    int y = x.get();
+
+    print("SHOULD NOT RUN", y);
+
+    return 0;
+}
+
+//  test96.lang:4:13: error: method call on non-class type 'int32'
+
+//  Status: method call on non-class type -> OK

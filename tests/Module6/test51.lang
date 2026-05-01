@@ -1,0 +1,15 @@
+int main() {
+    int a = 2 + 3 * 4;
+    int b = (2 + 3) * 4;
+    int c = 20 / 3;
+    int d = 20 % 3;
+    int e = 100 - 5 * 6 + 8 / 2;
+
+    int result = a + b + c + d + e;
+
+    print("TEST 1 OK", a, b, c, d, e, result);
+
+    return result;
+}
+
+//  Status: OK

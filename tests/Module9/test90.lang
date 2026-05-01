@@ -1,0 +1,49 @@
+int main() {
+    string prefix = "item";
+    string label = prefix + "-A";
+
+    char first = label[0];
+    int labelLen = len(label);
+
+    Data::Entry[] entries = [];
+
+    push(Data::makeEntry(1, label), entries);
+    push(Data::makeEntry(2, prefix + "-B"), entries);
+    push(Data::makeEntry(3, prefix + "-C"), entries);
+
+    Data::Entry removed = pop(entries);
+
+    int i = 0;
+    int total = 0;
+
+    while (i < len(entries)) {
+        total = total + entries[i].id + len(entries[i].name);
+        i++;
+    }
+
+    Data::Entry copy = entries[0];
+    copy.id = 100;
+
+    int result = total + removed.id + len(removed.name) + labelLen + cast<int>(first) + entries[0].id + copy.id;
+
+    print("TEST 10 OK", first, labelLen, len(entries), removed.id, removed.name, entries[0].id, copy.id, result);
+
+    return result;
+}
+
+namespace Data {
+    struct Entry {
+        int id;
+        string name;
+    }
+
+    Entry makeEntry(int id, string name) {
+        return Entry { id: id, name: name };
+    }
+}
+
+//  Runtime output:
+//  TEST 10 OK i 6 2 3 item-C 1 100 236
+//  runtime_exit=236
+
+//  Status: OK

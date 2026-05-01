@@ -1,0 +1,16 @@
+int main() {
+    int x = bad(10);
+
+    print("SHOULD NOT RUN", x);
+
+    return 0;
+}
+
+int bad(const int x) {
+    x = 20;
+    return x;
+}
+
+//  test68.lang:10:5: error: cannot assign to const 'x'
+
+//  Status: cannot assign to const parameter -> OK

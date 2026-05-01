@@ -1,0 +1,15 @@
+int main() {
+    int i = 3;
+
+    while (i) {
+        i--;
+    }
+
+    print("SHOULD NOT RUN", i);
+
+    return 0;
+}
+
+//  test75.lang:4:5: error: while condition must be bool, got 'int32'
+
+//  Status: while condition must be bool -> OK

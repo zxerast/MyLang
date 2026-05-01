@@ -1,0 +1,14 @@
+int main() {
+    string a = "hello";
+    string b = "world";
+
+    string c = a - b;
+
+    print("SHOULD NOT RUN", c);
+
+    return 0;
+}
+
+//  test55.lang:5:16: error: arithmetic operator requires numeric operands, got 'string' and 'string'
+
+//  Status: incompatible arithmetic operands -> OK

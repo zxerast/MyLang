@@ -1,0 +1,18 @@
+int main() {
+    Meters m = 10;
+    int raw = m;
+
+    Meters result = addMeters(raw, m);
+
+    print("TEST 5 OK", result);
+
+    return result;
+}
+
+Meters addMeters(Meters a, Meters b) {
+    return a + b;
+}
+
+type Meters = int;
+
+//  Status: OK

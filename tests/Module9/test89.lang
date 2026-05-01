@@ -1,0 +1,25 @@
+int main() {
+    int[][] matrix = [
+        [1, 2],
+        [3, 4]
+    ];
+
+    int[][] copy = matrix;
+
+    copy[0][0] = 100;
+
+    int fromFunc = mutateAndSum(matrix);
+
+    int result = matrix[0][0] + copy[0][0] + fromFunc;
+
+    print("TEST 9 OK", matrix[0][0], copy[0][0], fromFunc, result);
+
+    return result;
+}
+
+int mutateAndSum(int[][] m) {
+    m[0][0] = 50;
+    return m[0][0] + m[1][1];
+}
+
+//  Status: OK

@@ -1,0 +1,42 @@
+int main() {
+    Data::Pair[3] pairs = [
+        Data::makePair(1, 2),
+        Data::makePair(3, 4),
+        Data::Pair { left: 5, right: cast<Small>(6) }
+    ];
+
+    int64 a = pairs[0].left;
+    int64 b = pairs[1].right;
+    int64 c = Data::sumPair(pairs[2]);
+
+    int64 result = a + b + c;
+
+    print("TEST 10 OK", result);
+
+    return 0;
+}
+
+namespace Data {
+    struct Pair {
+        Small left;
+        Small right;
+    }
+
+    Pair makePair(Small a, Small b) {
+        return Pair { left: a, right: b };
+    }
+
+    int16 sumPair(Pair p) {
+        int16 x = p.left;
+        int16 y = p.right;
+        return x + y;
+    }
+}
+
+type Small = int8;
+
+//  Runtime output:
+//  TEST 10 OK 16
+//  runtime_exit=0
+
+//  Status: OK

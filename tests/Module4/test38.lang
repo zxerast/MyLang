@@ -1,0 +1,21 @@
+int main() {
+    bool t = true;
+    bool f = false;
+
+    int ti = cast<int>(t);
+    int fi = cast<int>(f);
+
+    bool b1 = cast<bool>(123);
+    bool b0 = cast<bool>(0);
+
+    char ch = 'A';
+    int code = cast<int>(ch);
+
+    char again = cast<char>(66);
+
+    print("TEST 8 OK", ti, fi, b1, b0, code, again);
+
+    return 0;
+}
+
+//  Status: OK

@@ -1,0 +1,12 @@
+int add(int a, int b) {
+    return a + b;
+}
+
+int value = add(1, 2);
+
+struct Point {
+    int x;
+    int y;
+}
+
+//  Status: no main message -> OK

@@ -1,0 +1,15 @@
+int main() {
+    int a = 2 ^ 3 ^ 2;
+    int b = (2 ^ 3) ^ 2;
+    int c = 2 ^ (3 ^ 2);
+
+    print("TEST 2 OK", a, b, c);
+
+    return a;
+}
+
+//  Runtime output:
+//  TEST 2 OK 2 2 2
+//  runtime_exit=2
+
+//  Status: OK

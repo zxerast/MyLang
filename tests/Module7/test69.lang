@@ -1,0 +1,21 @@
+int main() {
+    int x = sign(10);
+
+    print("SHOULD NOT RUN", x);
+
+    return 0;
+}
+
+int sign(int x) {
+    if (x > 0) {
+        return 1;
+    }
+
+    if (x < 0) {
+        return -1;
+    }
+}
+
+//  test69.lang:9:1: error: function 'sign' does not return a value on all paths
+
+//  Status: missing return on some path -> OK

@@ -1,0 +1,6 @@
+int main() {
+    auto c = 'AB';
+    return 0;
+}
+
+//  Status: unterminated char literal -> OK

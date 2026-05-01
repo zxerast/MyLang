@@ -1,0 +1,24 @@
+int main() {
+    int a = 10;
+    int b = 20;
+
+    int result = add(mul(a, 2), sub(b, 5));
+
+    print("TEST 1 OK", result);
+
+    return result;
+}
+
+int add(int x, int y) {
+    return x + y;
+}
+
+int sub(int x, int y) {
+    return x - y;
+}
+
+int mul(int x, int y) {
+    return x * y;
+}
+
+//  Status: OK

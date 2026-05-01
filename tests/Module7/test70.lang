@@ -1,0 +1,70 @@
+int main() {
+    Data::Point p = Data::makePoint(3, 4);
+
+    Data::Point[3] points = [
+        p,
+        Data::makePoint(10, 20),
+        Data::Point { x: cast<Small>(1), y: cast<Small>(2) }
+    ];
+
+    Accumulator acc = Accumulator(100);
+
+    int a = Data::sumPoint(points[0]);
+    int b = Data::sumPoint(points[1]);
+    int c = Data::sumPoint(points[2]);
+
+    int result = acc.add(a) + acc.add(b, 5) + acc.add(c, 10);
+
+    {
+        int result = choose(true, result, 0);
+        print("TEST 10 INNER", result);
+    }
+
+    print("TEST 10 OK", result);
+
+    return result;
+}
+
+int choose(bool flag, int a, int b) {
+    if (flag) {
+        return a;
+    } else {
+        return b;
+    }
+}
+
+namespace Data {
+    struct Point {
+        Small x;
+        Small y;
+    }
+
+    Point makePoint(auto x = 0, auto y = 0) {
+        return Point { x: cast<Small>(x), y: cast<Small>(y) };
+    }
+
+    int sumPoint(Point p) {
+        return p.x + p.y;
+    }
+}
+
+class Accumulator {
+    int base;
+
+    Accumulator(int start) {
+        base = start;
+    }
+
+    int add(int x, int extra = 0) {
+        return base + x + extra;
+    }
+}
+
+type Small = int8;
+
+//  Runtime output:
+//  TEST 10 INNER 355
+//  TEST 10 OK 355
+//  runtime_exit=99
+
+//  Status: OK

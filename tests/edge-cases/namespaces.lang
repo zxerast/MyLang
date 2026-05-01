@@ -1,0 +1,42 @@
+namespace LA {
+    struct Vec2 {
+        int x;
+        int y;
+    }
+
+    Vec2 make(int x, int y) {
+        return Vec2 { x: x, y: y };
+    }
+
+    int dot(Vec2 a, Vec2 b) {
+        return a.x * b.x + a.y * b.y;
+    }
+
+    class Accumulator {
+        int total;
+
+        Accumulator(int start) {
+            total = start;
+        }
+
+        void add(Vec2 a, Vec2 b) {
+            total = total + dot(a, b);
+        }
+
+        int value() {
+            return total;
+        }
+    }
+}
+
+int main() {
+    LA::Vec2 a = LA::make(2, 3);
+    LA::Vec2 b = LA::make(4, 5);
+
+    LA::Accumulator acc = LA::Accumulator(2);
+    acc.add(a, b);
+
+    print(LA::dot(a, b), acc.value());
+
+    return 0;
+}

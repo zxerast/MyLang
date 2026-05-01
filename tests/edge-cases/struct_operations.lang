@@ -1,0 +1,33 @@
+struct System2 {
+    float[2][2] a;
+    float[2] b;
+}
+
+float det2(System2 s) {
+    return s.a[0][0] * s.a[1][1] - s.a[0][1] * s.a[1][0];
+}
+
+float[2] solve2(System2 s) {
+    float d = det2(s);
+
+    if (d == 0.0) {
+        panic("singular system");
+    }
+
+    float x = (s.b[0] * s.a[1][1] - s.a[0][1] * s.b[1]) / d;
+    float y = (s.a[0][0] * s.b[1] - s.b[0] * s.a[1][0]) / d;
+
+    return [x, y];
+}
+
+int main() {
+    System2 s = System2 {
+        a: [[2.0, 1.0], [1.0, -1.0]],
+        b: [7.0, -1.0]
+    };
+
+    float[2] ans = solve2(s);
+    print(ans[0], ans[1]);
+
+    return 0;
+}
