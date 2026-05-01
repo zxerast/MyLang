@@ -1,0 +1,15 @@
+int main() {
+    int x = square("not int");
+
+    print("SHOULD NOT RUN", x);
+
+    return 0;
+}
+
+int square(int x) {
+    return x * x;
+}
+
+//  test64.lang:2:13: error: function 'square' argument 1: cannot convert 'string' to 'int32'
+
+//  Status: incompatible argument type -> OK

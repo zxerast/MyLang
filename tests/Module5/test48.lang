@@ -1,0 +1,16 @@
+int main() {
+    int x = 1;
+    int first = x;
+
+    int x = 2;
+    int second = x;
+
+    int x = 3;
+    int third = x;
+
+    print("TEST 8 OK", first, second, third, x);
+
+    return first + second + third + x;
+}
+
+//  Status: OK

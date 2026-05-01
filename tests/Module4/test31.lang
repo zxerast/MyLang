@@ -1,0 +1,24 @@
+int main() {
+    int8 a = 10;
+    int16 b = a;
+    int32 c = b;
+    int64 d = c;
+
+    uint8 ua = 20;
+    uint16 ub = ua;
+    uint32 uc = ub;
+    uint64 ud = uc;
+
+    float32 f32 = 1.5;
+    float64 f64 = f32;
+
+    float64 mixed = d + ud + f64;
+
+    print("TEST 1 OK", b, c, d, ub, uc, ud, mixed);
+
+    return 0;
+}
+
+//  test31.lang:15:21: error: incompatible types in arithmetic: 'int64' and 'uint64'
+
+//  Status: NOT OK -> FIX !!!

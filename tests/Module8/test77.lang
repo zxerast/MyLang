@@ -1,0 +1,20 @@
+int main() {
+    int i = 0;
+    int sum = 0;
+
+    while (i < 6) {
+        i++;
+
+        if (i % 2 == 0) {
+            continue;
+        }
+
+        sum = sum + i;
+    }
+
+    print("TEST 7 OK", i, sum);
+
+    return sum;
+}
+
+//  Status: OK

@@ -1,0 +1,30 @@
+int main() {
+    // deep namespace access
+    int x = Core::Math::BASE;
+    int y = Core::Math::Arithmetic::mul(6, 7);
+
+    print(x, y);
+
+    Core::Math::Show(x, y);
+
+    return x + y;
+}
+
+namespace Core {
+    namespace Math {
+        int BASE = 100;
+
+        namespace Arithmetic {
+            int mul(int a, int b) {
+                return a * b;
+            }
+        }
+
+        void Show(int x, int y){
+            print(x + y);
+        }
+    }
+}
+
+
+//  Status: OK

@@ -1,0 +1,15 @@
+int main() {
+    int x = add(1, 2, 3);
+
+    print("SHOULD NOT RUN", x);
+
+    return 0;
+}
+
+int add(int a, int b) {
+    return a + b;
+}
+
+//  test63.lang:2:13: error: function 'add' expects at most 2 arguments, got 3
+
+//  Status: too many arguments -> OK

@@ -1,0 +1,12 @@
+int main() {
+    int y = x + 1;
+    int x = 10;
+
+    print("SHOULD NOT RUN", y);
+
+    return 0;
+}
+
+//  test49.lang:2:13: error: 'x' is not declared
+
+//  Status: use before declaration -> OK

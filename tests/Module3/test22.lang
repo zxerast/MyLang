@@ -1,0 +1,16 @@
+int main() {
+    int x = 10;
+    int32 x32 = x;
+
+    uint y = 20;
+    uint32 y32 = y;
+
+    float z = 3.25;
+    float64 z64 = z;
+
+    print("TEST 2 OK", x32, y32, z64);
+
+    return 0;
+}
+
+//  Status: OK

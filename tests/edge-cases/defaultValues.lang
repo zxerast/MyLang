@@ -1,0 +1,22 @@
+struct Polynomial {
+    int degree = 2;
+    int[3] coef = [1, 0, -1];
+    int[] samples = [10, 11];
+}
+
+int main() {
+    Polynomial p;
+
+    Polynomial.coef = [2, 3, 4];
+    Polynomial.samples = [7, 8];
+
+    Polynomial q;
+
+    print(p.coef[0], p.coef[1], p.coef[2]);
+    print(q.coef[0], q.coef[1], q.coef[2]);
+
+    print(p.samples[0], p.samples[1]);
+    print(q.samples[0], q.samples[1]);
+
+    return 0;
+}

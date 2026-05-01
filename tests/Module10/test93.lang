@@ -1,0 +1,18 @@
+int main() {
+    Point p = Point { x: 1, y: 2 };
+
+    int z = p.z;
+
+    print("SHOULD NOT RUN", z);
+
+    return 0;
+}
+
+struct Point {
+    int x;
+    int y;
+}
+
+//  test93.lang:4:13: error: struct 'Point' has no field 'z'
+
+//  Status: unknown struct field -> OK

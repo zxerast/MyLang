@@ -47,3 +47,5 @@ global lang_exit
 lang_exit:
     mov rax, 60
     syscall
+
+section .note.GNU-stack noalloc noexec nowrite progbits

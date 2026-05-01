@@ -1,0 +1,10 @@
+int main() {
+    int64 big = 1000;
+    int8 small = big;
+
+    print("SHOULD NOT RUN", small);
+
+    return 0;
+}
+
+Status: cannot convert without cast -> OK

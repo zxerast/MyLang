@@ -1,0 +1,22 @@
+int[][] buildRows() {
+    int[][] matrix = [];
+
+    int[] row = [1, 2];
+    push(row, matrix);
+
+    row[0] = 99;
+    push(row, matrix);
+
+    return matrix;
+}
+
+int main() {
+    int[][] m = buildRows();
+
+    print(m[0][0], m[0][1]);
+    print(m[1][0], m[1][1]);
+
+    return 0;
+}
+
+//  shallow copy, not a value-copy

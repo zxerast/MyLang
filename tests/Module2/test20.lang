@@ -1,0 +1,9 @@
+void main() {
+    return;
+}
+
+int helper() {
+    return 0;
+}
+
+//  Status: main incorrect type -> OK

@@ -1,0 +1,19 @@
+int main() {
+    auto a = 10;
+    auto b = 2.5;
+    auto s = "auto-ok";
+    auto flag = a > 5;
+    auto ch = 'Q';
+    auto sum = a + 32;
+    auto fromFunc = getValue();
+
+    print("TEST 2 OK", a, b, s, flag, ch, sum, fromFunc);
+
+    return sum + fromFunc;
+}
+
+int getValue() {
+    return 100;
+}
+
+//  Status: OK

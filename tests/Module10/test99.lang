@@ -1,0 +1,15 @@
+import "test99_math_utils.lang"
+
+int main() {
+    Small s = 7;
+
+    Point p = Geometry::makePoint(10, 20);
+
+    int result = add(s, Geometry::manhattan(p));
+
+    print("TEST 9 OK", s, p.x, p.y, result);
+
+    return result;
+}
+
+//  Status: OK

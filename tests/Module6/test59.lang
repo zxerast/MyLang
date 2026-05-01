@@ -1,0 +1,32 @@
+int main() {
+    int x = makeBox().items[1].value;
+    int y = takeItem(makeBox().items[2]);
+
+    print("TEST 9 OK", x, y);
+
+    return x + y;
+}
+
+int takeItem(Item item) {
+    return item.value;
+}
+
+Box makeBox() {
+    return Box {
+        items: [
+            Item { value: 10 },
+            Item { value: 20 },
+            Item { value: 30 }
+        ]
+    };
+}
+
+struct Item {
+    int value;
+}
+
+struct Box {
+    Item[3] items;
+}
+
+//  Status: OK

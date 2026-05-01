@@ -1,0 +1,49 @@
+int main() {
+    Math::Cell[3] cells = [
+        Math::makeCell(2),
+        Math::makeCell(3),
+        Math::makeCell(4)
+    ];
+
+    auto a = cells[0].value + cells[1].value * cells[2].value;
+    auto b = (cells[0].value + cells[1].value) * cells[2].value;
+    auto c = cells[0].value ^ cells[1].value ^ 2;
+
+    cells[0].value++;
+    cells[1].value--;
+
+    bool check1 = a < b;
+    bool check2 = c > 100;
+    bool check3 = !(cells[0].value == cells[1].value);
+
+    int result = a + b + cast<int>(check1) + cast<int>(check2) + cast<int>(check3);
+
+    {
+        int result = 1000;
+        result = result + cells[0].value + cells[1].value + cells[2].value;
+        print("TEST 10 INNER", result);
+    }
+
+    print("TEST 10 OK", a, b, c, check1, check2, check3, result);
+
+    return result;
+}
+
+namespace Math {
+    struct Cell {
+        Small value;
+    }
+
+    Cell makeCell(Small x) {
+        return Cell { value: x };
+    }
+}
+
+type Small = int8;
+
+//  Runtime output:
+//  TEST 10 INNER 1009
+//  TEST 10 OK 14 20 2 true false true 36
+//  runtime_exit=36
+
+//  Status: OK

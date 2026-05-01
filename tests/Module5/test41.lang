@@ -1,0 +1,12 @@
+int main() {
+    int a = 1, b = 2, c;
+    c = a + b * 10;
+
+    int result = a + b + c;
+
+    print("TEST 1 OK", a, b, c, result);
+
+    return result;
+}
+
+//  Status: OK

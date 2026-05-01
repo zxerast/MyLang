@@ -1,0 +1,33 @@
+int[] selectionSort(int[] xs) {
+    int i = 0;
+
+    while (i < len(xs)) {
+        int best = i;
+        int j = i + 1;
+
+        while (j < len(xs)) {
+            if (xs[j] < xs[best]) {
+                best = j;
+            }
+            j++;
+        }
+
+        int tmp = xs[i];
+        xs[i] = xs[best];
+        xs[best] = tmp;
+
+        i++;
+    }
+
+    return xs;
+}
+
+int main() {
+    int[] a = [5, -1, 3, 3, 0];
+    int[] b = selectionSort(a);
+
+    print(a);
+    print(b);
+
+    return 0;
+}

@@ -1,0 +1,9 @@
+int main() {
+    void x;
+
+    print("SHOULD NOT RUN");
+
+    return 0;
+}
+
+//  Status: cannot create void var -> OK

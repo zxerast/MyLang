@@ -1,0 +1,26 @@
+struct Bucket {
+    int id;
+    int[] values;
+}
+
+Bucket makeBucket(int id, int a, int b) {
+    return Bucket {
+        id: id,
+        values: [a, b]
+    };
+}
+
+int main() {
+    Bucket[] buckets = [];
+
+    Bucket b = makeBucket(7, 1, 2);
+    push(b, buckets);
+
+    b.values[0] = 100;
+    push(b, buckets);
+
+    print(buckets[0].values[0], buckets[0].values[1]);
+    print(buckets[1].values[0], buckets[1].values[1]);
+
+    return 0;
+}

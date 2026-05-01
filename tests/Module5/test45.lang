@@ -1,0 +1,16 @@
+int main() {
+    const int BASE = 10;
+    const auto EXTRA = 5;
+
+    int result = add(BASE, EXTRA);
+
+    print("TEST 5 OK", BASE, EXTRA, result);
+
+    return result;
+}
+
+int add(int a, int b) {
+    return a + b;
+}
+
+//  Status: OK

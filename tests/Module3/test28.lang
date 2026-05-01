@@ -1,0 +1,12 @@
+int main() {
+    int[3] a = [1, 2, 3];
+    int[4] b = [10, 20, 30, 40];
+
+    int result = len(a) + len(b) + a[0] + b[3];
+
+    print("TEST 8 OK", result);
+
+    return result;
+}
+
+//  Status: OK

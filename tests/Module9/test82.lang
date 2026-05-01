@@ -1,0 +1,11 @@
+int main() {
+    int[4] arr = [1, 2, 3];
+
+    print("SHOULD NOT RUN", len(arr));
+
+    return 0;
+}
+
+//  test82.lang:2:18: error: array literal size mismatch: expected 4 elements, got 3
+
+//  Status: array literal size mismatch -> OK

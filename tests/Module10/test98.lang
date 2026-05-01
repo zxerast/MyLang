@@ -1,0 +1,17 @@
+int main() {
+    int x = Tools::missing(10);
+
+    print("SHOULD NOT RUN", x);
+
+    return 0;
+}
+
+namespace Tools {
+    int existing(int x) {
+        return x + 1;
+    }
+}
+
+//  test98.lang:2:13: error: 'Tools::missing' is not declared
+
+//  Status: unknown namespace member -> OK

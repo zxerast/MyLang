@@ -1,0 +1,9 @@
+int main() {
+    int8 x = 3.14;
+
+    print("SHOULD NOT RUN", x);
+
+    return 0;
+}
+
+//  Status: cannot convert -> OK

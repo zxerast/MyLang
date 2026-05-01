@@ -1,0 +1,12 @@
+int main() {
+    auto a = 123;
+    auto b = 123.456;
+    auto c = "hello world";
+    auto d = 'Z';
+    auto e = true;
+    auto f = false;
+
+    return 0;
+}
+
+//  Status: OK

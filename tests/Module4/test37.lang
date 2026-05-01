@@ -1,0 +1,11 @@
+int main() {
+    float64 f = 99.9;
+    int x = f;
+
+    print("SHOULD NOT RUN", x);
+
+    return 0;
+}
+
+
+//  Status: cannot convert -> OK

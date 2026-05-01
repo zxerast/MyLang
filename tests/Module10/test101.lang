@@ -1,0 +1,18 @@
+import <stdio.h>
+
+int main() {
+    string msg = "TEST 11 C OK";
+
+    puts(msg);
+
+    print("TEST 11 OK");
+
+    return 0;
+}
+
+//  Runtime output:
+//  TEST 11 OK
+//  TEST 11 C OK
+//  runtime_exit=0
+
+//  Status: OK

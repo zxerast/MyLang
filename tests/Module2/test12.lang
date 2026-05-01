@@ -1,0 +1,9 @@
+int main() {
+    int x = GLOBAL_VALUE + 1;
+    print(x);
+    return x;
+}
+
+int GLOBAL_VALUE = 41;
+
+//  Status: OK

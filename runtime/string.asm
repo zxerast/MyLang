@@ -19,6 +19,28 @@ lang_strlen:
     ret
 
 ;  ──────────────────────────────────────────────────────────────
+;  streq (rdi = left, rsi = right) → rax = 1 если строки равны, иначе 0
+;  ──────────────────────────────────────────────────────────────
+global lang_streq
+lang_streq:
+    xor rcx, rcx
+.se_loop:
+    mov al, [rdi + rcx]
+    mov dl, [rsi + rcx]
+    cmp al, dl
+    jne .se_false
+    test al, al
+    je .se_true
+    inc rcx
+    jmp .se_loop
+.se_true:
+    mov rax, 1
+    ret
+.se_false:
+    xor rax, rax
+    ret
+
+;  ──────────────────────────────────────────────────────────────
 ;  strcat (rdi = left, rsi = right) → rax = указатель на новую строку
 ;  Аллоцирует len(left) + len(right) + 1 байт, копирует оба и ставит \0.
 ;  ──────────────────────────────────────────────────────────────
@@ -99,3 +121,5 @@ lang_strcat:
     mov rsp, rbp
     pop rbp
     ret
+
+section .note.GNU-stack noalloc noexec nowrite progbits

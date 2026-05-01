@@ -53,3 +53,5 @@ lang_alloc:
 global lang_free
 lang_free:
     ret
+
+section .note.GNU-stack noalloc noexec nowrite progbits

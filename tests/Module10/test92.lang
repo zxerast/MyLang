@@ -1,0 +1,25 @@
+int main() {
+    Point before;
+
+    Point.x = 10;
+    Point.y = 20;
+
+    Point after;
+
+    Point.x = 100;
+
+    Point last;
+
+    int result = before.x + before.y + after.x + after.y + last.x + last.y;
+
+    print("TEST 2 OK", before.x, before.y, after.x, after.y, last.x, last.y, result);
+
+    return result;
+}
+
+struct Point {
+    int x;
+    int y;
+}
+
+//  Status: OK

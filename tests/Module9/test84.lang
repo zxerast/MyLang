@@ -1,0 +1,27 @@
+int main() {
+    int[] arr = [];
+
+    print("TEST 4 START", len(arr));
+
+    push(10, arr);
+    push(20, arr);
+    push(30, arr);
+
+    int before = len(arr);
+
+    int last = pop(arr);
+    int after = len(arr);
+
+    int result = before + after + last + arr[0] + arr[1];
+
+    print("TEST 4 OK", before, after, last, arr[0], arr[1], result);
+
+    return result;
+}
+
+//  Runtime output:
+//  TEST 4 START 0
+//  TEST 4 OK 3 2 30 10 20 65
+//  runtime_exit=65
+
+//  Status: OK

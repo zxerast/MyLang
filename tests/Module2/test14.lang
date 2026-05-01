@@ -1,0 +1,16 @@
+int main() {
+    Meters a = 10;
+    Meters b = 15;
+
+    Meters c = addMeters(a, b);
+    print(c);
+    return c;
+}
+
+Meters addMeters(Meters x, Meters y) {
+    return x + y;
+}
+
+type Meters = int;
+
+//  Status: OK

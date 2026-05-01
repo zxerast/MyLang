@@ -1,0 +1,25 @@
+int main() {
+    int x = 1;
+    int before = x;
+
+    {
+        int x = 10;
+        int inner1 = x;
+
+        {
+            int x = 100;
+            int inner2 = x;
+            print("TEST 7 INNER", inner1, inner2);
+        }
+
+        print("TEST 7 MIDDLE", inner1, x);
+    }
+
+    int after = x;
+
+    print("TEST 7 OK", before, after);
+
+    return before + after;
+}
+
+//  Status: OK

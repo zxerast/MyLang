@@ -1,0 +1,29 @@
+int main() {
+    int x = 5;
+    int y = changeInt(x);
+
+    Point p = Point { x: 1, y: 2 };
+    Point q = changePoint(p);
+
+    print("TEST 7 OK", x, y, p.x, p.y, q.x, q.y);
+
+    return x + y + p.x + p.y + q.x + q.y;
+}
+
+int changeInt(int value) {
+    value = 99;
+    return value;
+}
+
+Point changePoint(Point p) {
+    p.x = 100;
+    p.y = 200;
+    return p;
+}
+
+struct Point {
+    int x;
+    int y;
+}
+
+//  Status: OK

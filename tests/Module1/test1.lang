@@ -1,0 +1,16 @@
+// comment before program
+
+int      main     (     ) 
+{
+    // comment inside block
+    int     x      =      1      ;      // after statement
+    int
+        y
+            =
+                2
+                    ;
+
+    return x + y;
+}
+
+//  Status: OK

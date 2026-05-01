@@ -1,0 +1,25 @@
+int main() {
+    int x = 10;
+
+    x++;
+    x++;
+    x--;
+
+    int[3] arr = [1, 2, 3];
+
+    arr[0]++;
+    arr[1]--;
+    arr[2]++;
+
+    int result = x + arr[0] + arr[1] + arr[2];
+
+    print("TEST 7 OK", x, arr[0], arr[1], arr[2], result);
+
+    return result;
+}
+
+//  Runtime output:
+//  TEST 7 OK 11 1 2 3 17
+//  runtime_exit=17
+
+//  Status: OK

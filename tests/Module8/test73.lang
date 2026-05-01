@@ -1,0 +1,13 @@
+int main() {
+    int x = 1;
+
+    if (x) {
+        print("SHOULD NOT RUN");
+    }
+
+    return 0;
+}
+
+//  test73.lang:4:5: error: if condition must be bool, got 'int32'
+
+//  Status: if condition must be bool -> OK

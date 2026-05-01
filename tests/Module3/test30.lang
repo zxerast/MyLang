@@ -1,0 +1,45 @@
+int main() {
+    Geometry::Point p = Geometry::makePoint(3, 4);
+
+    Geometry::Segment[2] segments = [
+        Geometry::Segment {
+            from: Geometry::makePoint(0, 0),
+            to: p
+        },
+        Geometry::Segment {
+            from: p,
+            to: Geometry::makePoint(10, 20)
+        }
+    ];
+
+    Coord result = segments[0].to.x + segments[1].to.y;
+
+    print("TEST 10 OK", result);
+
+    return result;
+}
+
+namespace Geometry {
+    Point makePoint(Coord x, Coord y) {
+        return Point { x: x, y: y };
+    }
+
+    struct Point {
+        Coord x;
+        Coord y;
+    }
+
+    struct Segment {
+        Point from;
+        Point to;
+    }
+}
+
+type Coord = int;
+
+
+//  Runtime output:
+//  TEST 10 OK 23
+//  runtime_exit=23
+
+//  Status: OK

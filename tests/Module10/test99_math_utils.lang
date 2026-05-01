@@ -1,0 +1,24 @@
+export type Small = int8;
+
+export struct Point {
+    int x;
+    int y;
+}
+
+export int add(int a, int b) {
+    return a + b;
+}
+
+int hiddenValue() {
+    return 999;
+}
+
+export namespace Geometry {
+    Point makePoint(int x, int y) {
+        return Point { x: x, y: y };
+    }
+
+    int manhattan(Point p) {
+        return p.x + p.y;
+    }
+}

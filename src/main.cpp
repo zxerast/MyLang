@@ -11,7 +11,7 @@ int main(int argc, char* argv[]){
     std::string sourcePath;
     std::string outputPath;
     bool dumpTokens = false;
-    bool dumpAst = false;
+    // bool dumpAst = false;
 
     for (int i = 1; i < argc; i++){
         std::string arg = argv[i];
@@ -25,9 +25,9 @@ int main(int argc, char* argv[]){
         else if (arg == "--dump-tokens"){
             dumpTokens = true;
         }
-        else if (arg == "--dump-ast"){
+        /*else if (arg == "--dump-ast"){
             dumpAst = true;
-        }
+        }*/
         else if (arg == "-h" || arg == "--help"){
             std::cout << "Usage: myc <source> [-o <output>] [--dump-tokens] [--dump-ast]\n";
             return 0;
@@ -69,7 +69,6 @@ int main(int argc, char* argv[]){
         for (const auto& t : *tokens){
             std::cout << sourcePath << ":" << t.line << ":" << t.column
                       << "\ttype=" << static_cast<int>(t.type)
-                      << "\tsub=" << static_cast<int>(t.subType)
                       << "\tlexeme='" << t.lexeme << "'\n";
         }
     }
@@ -83,7 +82,7 @@ int main(int argc, char* argv[]){
     Program program;
     program.decls = *nodes;
 
-    if (dumpAst){
+    /*if (dumpAst){
         for (Stmt* decl : program.decls){
             std::string kind = "Unknown";
             std::string name;
@@ -98,7 +97,7 @@ int main(int argc, char* argv[]){
             std::cout << sourcePath << ":" << decl->line << ":" << decl->column
                       << "\t" << kind << "\t" << name << "\n";
         }
-    }
+    }*/
 
     SemanticAnalyzer analyzer;
     auto result = analyzer.analyze(&program, sourcePath);
@@ -110,6 +109,8 @@ int main(int argc, char* argv[]){
     if (outputPath.empty()){
         outputPath = std::filesystem::path(sourcePath).stem().string();
     }
+    outputPath = (std::filesystem::path("executables") / std::filesystem::path(outputPath).filename()).string();
+
     CodeGen codegen;
     auto codegenResult = codegen.generate(&program, outputPath);
     if (!codegenResult) {

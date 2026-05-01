@@ -7,6 +7,7 @@
 enum class TokenType {   // Тип токенов
     Number,
     StringLit,
+    CharLit,
     BoolLit,
     Plus,
     PlusPlus,
@@ -26,6 +27,11 @@ enum class TokenType {   // Тип токенов
     Iden,
     Equal,
     EqualEqual,
+    PlusEqual,
+    MinusEqual,
+    MulEqual,
+    DivideEqual,
+    ModuloEqual,
     NotEqual,
     Less,
     Greater,
@@ -35,7 +41,6 @@ enum class TokenType {   // Тип токенов
     Or,
     Not,
     Dot,
-    Arrow,
     Colon,
     ColonColon,
     Comma,
@@ -55,58 +60,27 @@ enum class TokenType {   // Тип токенов
     Import,
     Export,
     Class,
-    New,
-    Delete,
     Tilde,
+    Null,
     End,
-};
-
-enum class SubType {
-    None,
-    Int,
-    Uint,
-    Char,
-    Float,
-    Bool,
-    String,
-    Void,
-    Int8,
-    Int16,
-    Int32,
-    Int64,
-    Uint8,
-    Uint16,
-    Uint32,
-    Uint64,
-    Float32,
-    Float64
 };
 
 struct Token {
 
     TokenType type;  // Один токен типа выше
-    SubType subType;
     std::string lexeme; // Токен в виде строки
     int line = 0;       // Номер строки для отслеживания ошибок
     int column = 0;     // Номер столбца (1-based) начала токена
+    bool isFloat = false;
 
     Token(){
         this->type = TokenType::End;
         this->lexeme = "";
-        this->subType = SubType::None;
     }
 
     Token(TokenType type, std::string lexeme){
         this->type = type;
         this->lexeme = lexeme;
-        this->subType = SubType::None;
-
-    }
-
-    Token(TokenType type, SubType subType, std::string lexeme){
-        this->type = type;
-        this->lexeme = lexeme;
-        this->subType = subType;
     }
 };
 

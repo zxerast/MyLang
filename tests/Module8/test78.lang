@@ -1,0 +1,13 @@
+int main() {
+    if (true) {
+        break;
+    }
+
+    print("SHOULD NOT RUN");
+
+    return 0;
+}
+
+//  test78.lang:3:9: error: 'break' outside of loop
+
+//  Status: break outside loop -> OK

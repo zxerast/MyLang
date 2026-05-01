@@ -1,0 +1,18 @@
+int main() {
+    int[] arr = [];
+
+    print("TEST 5 BEFORE RUNTIME ERROR", len(arr));
+
+    int x = pop(arr);
+
+    print("SHOULD NOT RUN", x);
+
+    return 0;
+}
+
+//  Runtime output:
+//  TEST 5 BEFORE RUNTIME ERROR 0
+//  runtime error: pop from empty array at line 6
+//  runtime_exit=1
+
+//  Status: pop from empty array -> OK

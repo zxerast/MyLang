@@ -1,0 +1,29 @@
+int main() {
+    int a = 10;
+    uint b = 20;
+
+    int8 c = 1;
+    int16 d = 2;
+    int32 e = 3;
+    int64 f = 4;
+
+    uint8 g = 5;
+    uint16 h = 6;
+    uint32 i = 7;
+    uint64 j = 8;
+
+    float k = 1.5;
+    float32 l = 2.5;
+    float64 m = 3.5;
+
+    bool flag = true;
+    char ch = 'A';
+    string s = "types-ok";
+
+    print("TEST 1 OK", a++, b--, c, d, e, f, g, h, i, j, k, l, m, flag, ch, s);
+
+    return 0;
+}
+
+
+//  Status: OK

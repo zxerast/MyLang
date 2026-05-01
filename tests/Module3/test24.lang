@@ -1,0 +1,14 @@
+int main() {
+    bad(10);
+
+    print("SHOULD NOT RUN");
+
+    return 0;
+}
+
+int bad(void x) {
+    return 0;
+}
+
+
+//  Status: OK

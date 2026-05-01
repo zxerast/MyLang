@@ -1,0 +1,11 @@
+int main() {
+    auto x;
+
+    print("SHOULD NOT RUN", x);
+
+    return 0;
+}
+
+//  test43.lang:2:11: error: auto variable requires initializer
+
+//  Status: auto variable requires initializer -> OK

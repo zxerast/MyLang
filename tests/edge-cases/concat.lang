@@ -1,0 +1,17 @@
+string wrap(char left, string middle, char right) {
+    return left + middle + right;
+}
+
+int main() {
+    string s = "a" + "b";
+    string t = "ab";
+
+    print(s);
+    print(s == t, len(s));
+
+    string w = wrap('[', "x", ']');
+    print(w);
+    print(w == "[x]");
+
+    return 0;
+}

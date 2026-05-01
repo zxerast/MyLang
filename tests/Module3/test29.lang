@@ -1,0 +1,10 @@
+int main() {
+    int[3] a = [1, 2, 3];
+    int[4] b = a;
+
+    print("SHOULD NOT RUN", len(b));
+
+    return 0;
+}
+
+//  Status: cannot convert -> OK
