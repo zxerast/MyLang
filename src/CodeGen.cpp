@@ -58,9 +58,7 @@ int CodeGen::sizeOfType(const std::shared_ptr<Type>& type) const{    //  Воз�
             return 24; // ptr + len + cap
 
         case TypeKind::Array: {
-            int n = type->arraySize;
-            if (n < 0) return 0; // минимальный fallback для runtime-sized array
-            return sizeOfType(type->elementType) * n;
+            return sizeOfType(type->elementType) * type->arraySize;
         }
 
         case TypeKind::Struct: {
@@ -78,9 +76,7 @@ int CodeGen::sizeOfType(const std::shared_ptr<Type>& type) const{    //  Воз�
     return 8;
 }
 
-int CodeGen::allocLocal(const std::shared_ptr<Symbol>& sym, const std::string& nameHint, const std::shared_ptr<Type>& type) {
-    (void)nameHint;
-
+int CodeGen::advanceLocalFrameSize(int frameSize, const std::shared_ptr<Type>& type) const {
     int size = sizeOfType(type);
 
     if (size < 8) {
@@ -93,13 +89,17 @@ int CodeGen::allocLocal(const std::shared_ptr<Symbol>& sym, const std::string& n
         align = 8;
     }
 
-    int rem = currentFrameSize % align;
+    int rem = frameSize % align;
 
     if (rem != 0) {
-        currentFrameSize += align - rem;
+        frameSize += align - rem;
     }
 
-    currentFrameSize += size;
+    return frameSize + size;
+}
+
+int CodeGen::allocLocal(const std::shared_ptr<Symbol>& sym, const std::shared_ptr<Type>& type) {
+    currentFrameSize = advanceLocalFrameSize(currentFrameSize, type);
 
     int offset = -currentFrameSize;
 
@@ -110,6 +110,19 @@ int CodeGen::allocLocal(const std::shared_ptr<Symbol>& sym, const std::string& n
     }
 
     return offset;
+}
+
+void CodeGen::codegenError(int line, int column, const std::string& message) {
+    std::ostringstream ss;
+    ss << "codegen";
+    if (line > 0) {
+        ss << ":" << line;
+        if (column > 0) {
+            ss << ":" << column;
+        }
+    }
+    ss << ": " << message;
+    codegenErrors.push_back(ss.str());
 }
 
 const LocalVar* CodeGen::findLocal(const std::shared_ptr<Symbol>& sym) const {
@@ -124,6 +137,18 @@ const LocalVar* CodeGen::findLocal(const std::shared_ptr<Symbol>& sym) const {
     }
 
     return &it->second;
+}
+
+void CodeGen::emitAlignedCall(const std::string& target) {
+    if (currentCallAlignOffset == 0) {
+        text << "    call " << target << "\n";
+        return;
+    }
+
+    text << "    mov [rbp" << currentCallAlignOffset << "], rsp\n";
+    text << "    and rsp, -16\n";
+    text << "    call " << target << "\n";
+    text << "    mov rsp, [rbp" << currentCallAlignOffset << "]\n";
 }
 
 static std::string ptrSuffix(const std::shared_ptr<Symbol>& sym) {
@@ -141,17 +166,20 @@ static std::string ptrSuffix(const std::shared_ptr<Symbol>& sym) {
 //  Инициализирует слот глобалки в прологе main. Логика зеркалит локальный VarDecl,
 //  но пишет в .bss-лейбл глобального символа вместо стэковой локалки.
 void CodeGen::compileGlobalInit(VarDecl* decl, VarInit* var) {
-    auto type = varInitType(var, decl);
-    std::string slot = globalLabel(var->resolvedSym, var->name);
+    auto type = varInitType(var);
 
     if (!type) {
+        codegenError(decl ? decl->line : 0, decl ? decl->column : 0,
+            "global variable '" + (var ? var->name : std::string("<null>")) + "' has no resolved type");
         return;
     }
+
+    std::string slot = globalLabel(var->resolvedSym);
 
     // Без инициализатора: default прямо в глобальный слот.
     if (!var->init) {
         text << "    lea rdi, [rel " << slot << "]\n";
-        emitDefault("rdi", type);
+        emitDefaultAt("rdi", 0, type);
         return;
     }
 
@@ -168,16 +196,6 @@ void CodeGen::compileGlobalInit(VarDecl* decl, VarInit* var) {
     // Обычные скаляры.
     compileExprAs(var->init, type);
     emitStore("[rel " + slot + "]", type);
-}
-
-bool CodeGen::isDynArrayTypeName(TypeName* name) {
-    if (!name || name->suffixes.empty()) return false;
-    return name->suffixes.back().isDynamic;
-}
-
-bool CodeGen::isFloatTypeName(TypeName* name) {
-    if (!name || !name->suffixes.empty()) return false;
-    return name->base == "float" || name->base == "float32" || name->base == "float64";
 }
 
 std::shared_ptr<Type> CodeGen::exprType(Expr* e) const {
@@ -244,23 +262,13 @@ std::shared_ptr<Type> CodeGen::exprType(Expr* e) const {
     return nullptr;
 }
 
-std::shared_ptr<Type> CodeGen::varInitType(VarInit* v, VarDecl* decl) const {
-    (void)decl;
-
+std::shared_ptr<Type> CodeGen::varInitType(VarInit* v) const {
     if (!v) {
         return nullptr;
     }
 
-    // Для переменной главный источник — её семантический символ.
-    // Это покрывает explicit type, auto, aliases, namespace-shadowing, runtime-sized arrays.
     if (v->resolvedSym && v->resolvedSym->type) {
         return v->resolvedSym->type;
-    }
-
-    // Аварийный fallback только для уже аннотированного initializer.
-    // Не заменяет тип объявления, но позволяет не падать на частично старом AST.
-    if (v->init && v->init->resolvedType) {
-        return v->init->resolvedType;
     }
 
     return nullptr;
@@ -269,10 +277,6 @@ std::shared_ptr<Type> CodeGen::varInitType(VarInit* v, VarDecl* decl) const {
 std::shared_ptr<Type> CodeGen::paramType(const Param& p) const {
     if (p.resolvedSym && p.resolvedSym->type) {
         return p.resolvedSym->type;
-    }
-
-    if (p.defaultValue && p.defaultValue->resolvedType) {
-        return p.defaultValue->resolvedType;
     }
 
     return nullptr;
@@ -312,10 +316,6 @@ std::shared_ptr<Type> CodeGen::returnType(FuncDecl* func) const {
     if (func->resolvedSym && func->resolvedSym->funcInfo &&
         func->resolvedSym->funcInfo->returnType) {
         return func->resolvedSym->funcInfo->returnType;
-    }
-
-    if (func->resolvedSym && func->resolvedSym->type) {
-        return func->resolvedSym->type;
     }
 
     return nullptr;
@@ -402,18 +402,37 @@ std::string CodeGen::symbolLabel(const std::shared_ptr<Symbol>& sym, const std::
             sym->name == "exit" || sym->name == "panic" ||
             sym->name == "push" || sym->name == "pop";
         bool alreadyQualified = sym->name.find("::") != std::string::npos;
-        if (sym->kind == SymbolKind::Function && !isBuiltin && !alreadyQualified && !currentNamespace.empty()) {
-            return mangleQualifiedName(currentNamespace + "::" + sym->name);
+        bool isExternC = sym->funcInfo && sym->funcInfo->isExternC;
+        bool isPrivateFunction = sym->kind == SymbolKind::Function && !sym->isExported && sym->name != "main" && !isBuiltin && !isExternC;
+
+        auto makeLabel = [&](const std::string& name) {
+            std::string label = mangleQualifiedName(name);
+            if (isPrivateFunction) {
+                label += "__private_" + ptrSuffix(sym);
+            }
+            return label;
+        };
+
+        if (sym->kind == SymbolKind::Function && !isBuiltin && !alreadyQualified) {
+            if (!currentNamespace.empty()) {
+                return makeLabel(currentNamespace + "::" + sym->name);
+            }
+            if (fallbackName.find("::") != std::string::npos) {
+                return makeLabel(fallbackName);
+            }
         }
-        return mangleQualifiedName(sym->name);
+
+        return makeLabel(sym->name);
     }
     return mangleQualifiedName(fallbackName);
 }
 
-int CodeGen::storageSizeOfType(const std::shared_ptr<Type>& type) const {
-    if (!type) return 8;
+std::string CodeGen::functionLabel(FuncDecl* func) const {
+    if (!func) {
+        return "__function_unresolved_0";
+    }
 
-    return sizeOfType(type);
+    return symbolLabel(func->resolvedSym, func->name);
 }
 
 bool CodeGen::isSignedIntType(const std::shared_ptr<Type>& type) {
@@ -654,7 +673,7 @@ void CodeGen::emitNullCheck(const std::string& reg, int line) {
     text << "    jnz " << okLabel << "\n";
     text << "    lea rdi, [rel __rt_null_object]\n";
     text << "    mov rsi, " << line << "\n";
-    text << "    call lang_panic\n";
+    emitAlignedCall("lang_panic");
     text << okLabel << ":\n";
 }
 
@@ -868,9 +887,7 @@ void CodeGen::emitLoad(const std::string& addr, const std::shared_ptr<Type>& typ
         case TypeKind::Struct:
         case TypeKind::Array:
         case TypeKind::DynArray:
-            // Массив как expression должен возвращать адрес, а не грузиться как qword.
-            // Поэтому сюда лучше не попадать.
-            text << "    ; emitLoad skipped for memory aggregate\n";
+            codegenError(0, 0, "internal error: attempted scalar load from memory aggregate");
             break;
 
         case TypeKind::Alias:
@@ -922,7 +939,7 @@ void CodeGen::emitStore(const std::string& addr, const std::shared_ptr<Type>& ty
         case TypeKind::Struct:
         case TypeKind::Array:
         case TypeKind::DynArray:
-            text << "    ; emitStore skipped for memory aggregate\n";
+            codegenError(0, 0, "internal error: attempted scalar store to memory aggregate");
             break;
 
         case TypeKind::Void:
@@ -965,6 +982,9 @@ void CodeGen::emitCopy(const std::string& dstReg, const std::string& srcReg, con
             text << "    add rsp, 16\n";
             return;
         }
+
+        codegenError(0, 0, "class '" + type->name + "' has no collected layout");
+        return;
     }
 
     // scalar copy
@@ -977,12 +997,6 @@ void CodeGen::emitCopy(const std::string& dstReg, const std::string& srcReg, con
     // fixed array: value-copy every element
     if (type->kind == TypeKind::Array) {
         int n = type->arraySize;
-        if (n < 0) {
-            // runtime-sized fixed arrays пока безопасно копируем как указатель/fallback
-            text << "    ; unsupported value-copy of runtime-sized fixed array\n";
-            return;
-        }
-
         int elemSize = sizeOfType(type->elementType);
 
         text << "    push " << dstReg << "\n";
@@ -1030,7 +1044,7 @@ void CodeGen::emitCopy(const std::string& dstReg, const std::string& srcReg, con
         // allocate len * elemSize
         text << "    mov rdi, rax\n";
         text << "    imul rdi, " << elemSize << "\n";
-        text << "    call lang_alloc\n";
+        emitAlignedCall("lang_alloc");
 
         // restore dst/src addresses without popping
         text << "    mov rbx, [rsp + 8]\n"; // dst
@@ -1110,9 +1124,12 @@ void CodeGen::emitCopy(const std::string& dstReg, const std::string& srcReg, con
             text << "    add rsp, 16\n";
             return;
         }
+
+        codegenError(0, 0, "struct '" + type->name + "' has no collected layout");
+        return;
     }
 
-    // fallback bytewise copy
+    // bytewise copy for non-aggregate values larger than a register.
     int qwords = size / 8;
     int bytes = size % 8;
 
@@ -1190,7 +1207,7 @@ void CodeGen::emitDefaultAt(const std::string& dstReg, int offset, const std::sh
             break;
 
         case TypeKind::Array: {
-            int elemSize = storageSizeOfType(type->elementType);
+            int elemSize = sizeOfType(type->elementType);
             int n = type->arraySize;
 
             if (n < 0) n = 0;
@@ -1208,10 +1225,7 @@ void CodeGen::emitDefaultAt(const std::string& dstReg, int offset, const std::sh
             if (orderIt == structFieldOrder.end() ||
                 layoutIt == structLayouts.end() ||
                 typeIt == structFieldTypes.end()) {
-                int size = sizeOfType(type);
-                for (int i = 0; i < size; ++i) {
-                    text << "    mov byte [" << dstReg << " + " << (offset + i) << "], 0\n";
-                }
+                codegenError(0, 0, "struct '" + type->name + "' has no collected layout for default initialization");
                 break;
             }
 
@@ -1245,7 +1259,7 @@ void CodeGen::emitAddress(Expr* expr) {
         }
 
         if (isGlobal(id->resolvedSym)) {
-            text << "    lea rax, [rel " << globalLabel(id->resolvedSym, id->name) << "]\n";
+            text << "    lea rax, [rel " << globalLabel(id->resolvedSym) << "]\n";
             return;
         }
 
@@ -1367,7 +1381,7 @@ void CodeGen::emitAddress(Expr* expr) {
             text << "    jb " << okLabel << "\n";
             text << "    lea rdi, [rel __rt_bounds]\n";
             text << "    mov rsi, " << aa->line << "\n";
-            text << "    call lang_panic\n";
+            emitAlignedCall("lang_panic");
             text << okLabel << ":\n";
 
             text << "    mov rax, [rax]\n";
@@ -1401,18 +1415,16 @@ void CodeGen::emitAddress(Expr* expr) {
 
             std::string okLabel = newLabel("bndok");
 
-            if (objType->arraySize >= 0) {
-                text << "    cmp rbx, " << objType->arraySize << "\n";
-                text << "    jb " << okLabel << "\n";
-                text << "    lea rdi, [rel __rt_bounds]\n";
-                text << "    mov rsi, " << aa->line << "\n";
-                text << "    call lang_panic\n";
-                text << okLabel << ":\n";
-            }
+            text << "    cmp rbx, " << objType->arraySize << "\n";
+            text << "    jb " << okLabel << "\n";
+            text << "    lea rdi, [rel __rt_bounds]\n";
+            text << "    mov rsi, " << aa->line << "\n";
+            emitAlignedCall("lang_panic");
+            text << okLabel << ":\n";
 
             int elemSize = 8;
             if (objType->elementType) {
-                elemSize = storageSizeOfType(objType->elementType);
+                elemSize = sizeOfType(objType->elementType);
             }
 
             if (elemSize == 1) {
@@ -1438,21 +1450,13 @@ void CodeGen::emitAddress(Expr* expr) {
             return;
         }
 
-        // Неизвестная форма массива: используем qword-индексирование.
-        compileExpr(aa->object);
-        text << "    push rax\n";
-
-        compileExpr(aa->index);
-        text << "    mov rbx, rax\n";
-
-        text << "    pop rax\n";
-        text << "    lea rax, [rax + rbx*8]\n";
+        codegenError(aa->line, aa->column, "array access object has no indexable resolved type");
         return;
     }
 
     if (auto* na = dynamic_cast<NamespaceAccess*>(expr)) {
         if (isGlobal(na->resolvedSym)) {
-            text << "    lea rax, [rel " << globalLabel(na->resolvedSym, mangleNamespaceAccess(na)) << "]\n";
+            text << "    lea rax, [rel " << globalLabel(na->resolvedSym) << "]\n";
         }
         else {
             text << "    lea rax, [rel " << mangleNamespaceAccess(na) << "]\n";
@@ -1461,8 +1465,49 @@ void CodeGen::emitAddress(Expr* expr) {
     }
 }
 
-void CodeGen::emitDefault(const std::string& dstReg, const std::shared_ptr<Type>& type) {
-    emitDefaultAt(dstReg, 0, type);
+void CodeGen::emitRuntimeDefaultAt(const std::string& dstReg, int offset, const std::shared_ptr<Type>& type) {
+    if (!type) {
+        emitDefaultAt(dstReg, offset, type);
+        return;
+    }
+
+    if (type->kind == TypeKind::Struct) {
+        auto orderIt = structFieldOrder.find(type->name);
+        auto layoutIt = structLayouts.find(type->name);
+        auto typeIt = structFieldTypes.find(type->name);
+
+        if (orderIt == structFieldOrder.end() ||
+            layoutIt == structLayouts.end() ||
+            typeIt == structFieldTypes.end()) {
+            codegenError(0, 0, "struct '" + type->name + "' has no collected layout for runtime default initialization");
+            return;
+        }
+
+        text << "    push " << dstReg << "\n";
+        for (const auto& fieldName : orderIt->second) {
+            int fieldOff = layoutIt->second[fieldName];
+            auto fieldType = typeIt->second[fieldName];
+
+            text << "    mov rdi, [rsp]\n";
+            if (offset + fieldOff != 0) {
+                text << "    add rdi, " << (offset + fieldOff) << "\n";
+            }
+            text << "    lea rsi, [rel __default_" << mangleQualifiedName(type->name) << "_" << fieldName << "]\n";
+            emitCopy("rdi", "rsi", fieldType);
+        }
+        text << "    add rsp, 8\n";
+        return;
+    }
+
+    if (type->kind == TypeKind::Array && type->arraySize > 0) {
+        int elemSize = sizeOfType(type->elementType);
+        for (int i = 0; i < type->arraySize; ++i) {
+            emitRuntimeDefaultAt(dstReg, offset + i * elemSize, type->elementType);
+        }
+        return;
+    }
+
+    emitDefaultAt(dstReg, offset, type);
 }
 
 void CodeGen::compileExprAs(Expr* expr, const std::shared_ptr<Type>& targetType) {
@@ -1480,42 +1525,42 @@ void CodeGen::compileExprAs(Expr* expr, const std::shared_ptr<Type>& targetType)
 
 //  Регистрирует смещение полей struct/class: скаляры/указатели — qword, DynArray (T[]) — 3 qword'а (ptr/len/cap)
 void CodeGen::collectLayout(const std::string& name, const std::vector<StructField>& fields) {
-    auto& layout = structLayouts[name];
-    auto& types = structFieldTypes[name];
-    auto& order = structFieldOrder[name];
+    auto& layout = structLayouts[name];     //  смещение полей структуры
+    auto& types = structFieldTypes[name];   //  типы полей структуры
+    auto& order = structFieldOrder[name];   //  порядок объявления полей структуры
 
-    layout.clear();
+    layout.clear(); //  Очистка данных прошлой структуры
     types.clear();
     order.clear();
 
-    int offset = 0;
+    int offset = 0; //  Текущее смещение внутри текущей структуры
 
     for (auto& field : fields) {
         std::shared_ptr<Type> fieldType = nullptr;
 
-        if (field.resolvedType) {
+        if (field.resolvedType) {   //  Берём тип из контекста
             fieldType = field.resolvedType;
         }
-        else if (field.defaultValue && field.defaultValue->resolvedType) {
+        else if (field.defaultValue && field.defaultValue->resolvedType) {  //  Или из значения
             fieldType = field.defaultValue->resolvedType;
         }
         
 
         if (!fieldType) {
-            fieldType = std::make_shared<Type>();
-            fieldType->kind = TypeKind::Int64;
+            codegenError(0, 0, "field '" + name + "." + field.name + "' has no resolved type");
+            continue;
         }
 
-        int align = sizeOfType(fieldType);
+        int align = sizeOfType(fieldType);  //  В зависимости от типа выравниваем его до 8
         if (align <= 0) align = 1;
         if (align > 8) align = 8;
 
-        int rem = offset % align;
+        int rem = offset % align;   //  Если не кратно 8 то добавляем до ближвейшего кратного
         if (rem != 0) {
             offset += align - rem;
         }
 
-        layout[field.name] = offset;
+        layout[field.name] = offset;    //  Всё записываем
         types[field.name] = fieldType;
         order.push_back(field.name);
 
@@ -1525,7 +1570,7 @@ void CodeGen::collectLayout(const std::string& name, const std::vector<StructFie
         offset += sz;
     }
 
-    int rem = offset % 8;
+    int rem = offset % 8;   //  Смотрим общее выравнивание всей структуры
     if (rem != 0) {
         offset += 8 - rem;
     }
@@ -1580,19 +1625,18 @@ void CodeGen::collectDecls(Stmt* decl) {
             if (!init->resolvedSym) continue;
             if (globalsBySymbol.count(init->resolvedSym)) continue;
 
-            std::shared_ptr<Type> type = varInitType(init, var);
+            std::shared_ptr<Type> type = varInitType(init);
             globalsBySymbol[init->resolvedSym] = type;
-            globalLabelsBySymbol[init->resolvedSym] = globalLabel(init->resolvedSym, init->name);
+            globalLabelsBySymbol[init->resolvedSym] = globalLabel(init->resolvedSym);
 
             globalVars.push_back({var, init});
         }
     }
 }
 
-std::string CodeGen::globalLabel(const std::shared_ptr<Symbol>& sym, const std::string& nameHint) {
-    (void)nameHint;
-
+std::string CodeGen::globalLabel(const std::shared_ptr<Symbol>& sym) {
     if (!sym) {
+        codegenError(0, 0, "global symbol is unresolved");
         return "__global_unresolved_0";
     }
 
@@ -1634,7 +1678,7 @@ bool CodeGen::emitDynArrayAddr(Expr* e, const char* reg) {
             }
         }
         if (isGlobal(id->resolvedSym)) {
-            text << "    lea " << reg << ", [rel " << globalLabel(id->resolvedSym, id->name) << "]\n";
+            text << "    lea " << reg << ", [rel " << globalLabel(id->resolvedSym) << "]\n";
             return true;
         }
     }
@@ -1766,10 +1810,7 @@ std::expected<void, std::string> CodeGen::generate(Program* program, const std::
     text << "extern lang_panic\n";
     text << "extern lang_exit\n";
     text << "extern lang_alloc\n";
-    text << "extern lang_free\n";
-    text << "extern lang_push\n";
     text << "extern lang_push_sized\n";
-    text << "extern lang_pop\n";
     text << "extern lang_pop_sized\n";
     text << "extern lang_strcat\n";
     text << "extern lang_streq\n\n";
@@ -1788,14 +1829,23 @@ std::expected<void, std::string> CodeGen::generate(Program* program, const std::
         collectDecls(decl);
     }
 
-    //  Выделяем .bss-слоты под default-значения полей структур: один qword на поле с default.
-    //  Это позволяет переопределять default в рантайме (`StructName.field = value`).
+    if (!codegenErrors.empty()) {
+        std::ostringstream ss;
+        for (size_t i = 0; i < codegenErrors.size(); ++i) {
+            if (i != 0) ss << "\n";
+            ss << codegenErrors[i];
+        }
+        return std::unexpected(ss.str());
+    }
+
+    //  Выделяем .bss-слоты под runtime default-значения всех полей структур.
+    //  Даже поля без явного default должны иметь адрес для `StructName.field = value`.
     for (auto* sd : structDeclsOrdered) {
         std::string structName = structDeclNames.count(sd) ? structDeclNames[sd] : sd->name;
         for (auto& field : sd->fields) {
-            if (field.defaultValue) {
-                bss << "__default_" << mangleQualifiedName(structName) << "_" << field.name << ": resq 1\n";
-            }
+            int size = sizeOfType(field.resolvedType);
+            if (size <= 0) size = 8;
+            bss << "__default_" << mangleQualifiedName(structName) << "_" << field.name << ": resb " << size << "\n";
         }
     }
 
@@ -1820,7 +1870,7 @@ std::expected<void, std::string> CodeGen::generate(Program* program, const std::
         }
         int size = sizeOfType(type);
         if (size < 8) size = 8;
-        bss << globalLabel(global.var->resolvedSym, global.var->name) << ": resb " << size << "\n";
+        bss << globalLabel(global.var->resolvedSym) << ": resb " << size << "\n";
     }
 
     //  Компилируем каждую функцию верхнего уровня (включая методы классов)
@@ -1832,6 +1882,15 @@ std::expected<void, std::string> CodeGen::generate(Program* program, const std::
     }
     for (auto* decl : program->decls) {
         compileDecl(decl, "");
+    }
+
+    if (!codegenErrors.empty()) {
+        std::ostringstream ss;
+        for (size_t i = 0; i < codegenErrors.size(); ++i) {
+            if (i != 0) ss << "\n";
+            ss << codegenErrors[i];
+        }
+        return std::unexpected(ss.str());
     }
 
     if (!hasMain)
@@ -1867,6 +1926,7 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
     hasSelfLocal = false;
     classLocals.clear();
     currentFrameSize = 0;   //  Байт на функцию
+    currentCallAlignOffset = 0;
 
     auto previousReturnType = currentReturnType;
     currentReturnType = returnType(func);
@@ -1877,7 +1937,7 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
     currentHasSRet = isCompositeMemoryType(currentReturnType);
     currentSRetOffset = 0;
 
-    std::string symbol = mangleQualifiedName(func->name);
+    std::string symbol = functionLabel(func);
     currentEndLabel = ".end_of_" + symbol;  //  Имя метки переводящей в конец, для return
     text << "global " << symbol << "\n";    //  Определяем нашу функцию глобальной
     text << symbol << ":\n";    //  Метка для неё
@@ -1885,24 +1945,25 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
     text << "    push rbp\n";   //  Начало функции
     text << "    mov rbp, rsp\n";
 
+    currentCallAlignOffset = allocLocal(nullptr, nullptr);
+
     if (currentHasSRet) {
-        currentSRetOffset = allocLocal(nullptr, "__sret", nullptr);
+        currentSRetOffset = allocLocal(nullptr, nullptr);
     }
 
     if (isMethod) {     //  Метод: self — неявный параметр после hidden return pointer
-        selfLocal = {allocLocal(nullptr, "self", nullptr), nullptr};
+        selfLocal = {allocLocal(nullptr, nullptr), nullptr};
         hasSelfLocal = true;
     }
 
     for (size_t i = 0; i < func->params.size(); i++) {
         auto& param = func->params[i];
         auto type = paramType(func, i);
-        allocLocal(param.resolvedSym, param.name, type);
+        allocLocal(param.resolvedSym, type);
     }
 
-    int paramBytes = currentFrameSize;
-    int bodyBytes = countLocalsSize(func->body);
-    int frameSize = ((paramBytes + bodyBytes + 15) / 16) * 16;  //  Новый размер фрейма функции
+    int frameUsed = countLocalsSize(func->body, currentFrameSize);
+    int frameSize = ((frameUsed + 15) / 16) * 16;  //  Новый размер фрейма функции
 
     if (frameSize > 0) {
         text << "    sub rsp, " << frameSize << "\n";   //  Выделяем
@@ -2006,15 +2067,31 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
         text << "    add rsp, " << ((savedParamRegEnd - savedParamRegStart) * 8) << "\n";
     }
 
-    //  В начале main инициализируем default-слоты структур из их объявленных выражений.
-    //  Делаем это до тела пользователя, чтобы любые struct-литералы видели уже заполненные значения.
+    //  В начале main инициализируем runtime default-слоты объявленными default-выражениями
+    //  или default-значениями типов. Дальше `Type.field = value` меняет эти слоты уже в runtime.
     if (!isMethod && func->name == "main") {
         for (auto* sd : structDeclsOrdered) {
             std::string structName = structDeclNames.count(sd) ? structDeclNames[sd] : sd->name;
             for (auto& field : sd->fields) {
-                if (!field.defaultValue) continue;
-                compileExpr(field.defaultValue);
-                text << "    mov [rel __default_" << mangleQualifiedName(structName) << "_" << field.name << "], rax\n";
+                auto fieldType = field.resolvedType;
+                std::string label = "__default_" + mangleQualifiedName(structName) + "_" + field.name;
+
+                if (field.defaultValue) {
+                    if (isCompositeMemoryType(fieldType)) {
+                        compileExpr(field.defaultValue);
+                        text << "    mov rsi, rax\n";
+                        text << "    lea rdi, [rel " << label << "]\n";
+                        emitCopy("rdi", "rsi", fieldType);
+                    }
+                    else {
+                        compileExprAs(field.defaultValue, fieldType);
+                        emitStore("[rel " + label + "]", fieldType);
+                    }
+                }
+                else {
+                    text << "    lea rdi, [rel " << label << "]\n";
+                    emitRuntimeDefaultAt("rdi", 0, fieldType);
+                }
             }
         }
         //  И дефолтные экземпляры классов: для каждого поля с default кладём значение
@@ -2023,20 +2100,25 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
             std::string className = classDeclNames.count(cd) ? classDeclNames[cd] : cd->name;
             auto& layout = structLayouts[className];
             for (auto& field : cd->fields) {
-                if (!field.defaultValue) continue;
                 int off = 0;
                 if (layout.count(field.name)) off = layout[field.name];
                 auto fieldType = field.resolvedType;
 
-                if (isCompositeMemoryType(fieldType)) {
-                    compileExpr(field.defaultValue);
-                    text << "    mov rsi, rax\n";
-                    text << "    lea rdi, [rel __default_instance_" << mangleQualifiedName(className) << " + " << off << "]\n";
-                    emitCopy("rdi", "rsi", fieldType);
+                if (field.defaultValue) {
+                    if (isCompositeMemoryType(fieldType)) {
+                        compileExpr(field.defaultValue);
+                        text << "    mov rsi, rax\n";
+                        text << "    lea rdi, [rel __default_instance_" << mangleQualifiedName(className) << " + " << off << "]\n";
+                        emitCopy("rdi", "rsi", fieldType);
+                    }
+                    else {
+                        compileExprAs(field.defaultValue, fieldType);
+                        emitStore("[rel __default_instance_" + mangleQualifiedName(className) + " + " + std::to_string(off) + "]", fieldType);
+                    }
                 }
                 else {
-                    compileExprAs(field.defaultValue, fieldType);
-                    emitStore("[rel __default_instance_" + mangleQualifiedName(className) + " + " + std::to_string(off) + "]", fieldType);
+                    text << "    lea rdi, [rel __default_instance_" << mangleQualifiedName(className) << " + " << off << "]\n";
+                    emitRuntimeDefaultAt("rdi", 0, fieldType);
                 }
             }
         }
@@ -2059,7 +2141,7 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
             text << "    mov rdi, [rbp" << i->first << "]\n";
             text << "    test rdi, rdi\n";
             text << "    jz " << skipLabel << "\n";
-            text << "    call " << i->second << "_dtor\n";
+            emitAlignedCall(i->second + "_dtor");
             text << skipLabel << ":\n";
         }
         text << "    mov rax, [rsp]\n";
@@ -2072,35 +2154,33 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
     currentReturnType = previousReturnType;
     currentHasSRet = previousHasSRet;
     currentSRetOffset = previousSRetOffset;
+    currentCallAlignOffset = 0;
 }
 
-int CodeGen::countLocalsSize(Stmt* stmt) {  //  Считаем размер локалок
-    if (!stmt) return 0;
+int CodeGen::countLocalsSize(Stmt* stmt, int frameSize) {  //  Считаем layout локалок
+    if (!stmt) return frameSize;
 
     if (auto* block = dynamic_cast<Block*>(stmt)) {     
-        int sum = 0;
         for (auto* i : block->statements) {     //  Находим рекурсивно все переменные в блоке
-            sum += countLocalsSize(i);
+            frameSize = countLocalsSize(i, frameSize);
         }
-        return sum;
+        return frameSize;
     }
     if (auto* var = dynamic_cast<VarDecl*>(stmt)) { //  Переменные
-        int sum = 0;
         for (auto* init : var->vars) {
-            std::shared_ptr<Type> type = varInitType(init, var);
-            int size = sizeOfType(type);
-            if (size < 8) size = 8;     //  Минимум 8 — слоты локалок всегда qword-выровнены
-            sum += size;
+            std::shared_ptr<Type> type = varInitType(init);
+            frameSize = advanceLocalFrameSize(frameSize, type);
         }
-        return sum;
+        return frameSize;
     }
     if (auto* i = dynamic_cast<If*>(stmt)) {
-        return countLocalsSize(i->thenBranch) + countLocalsSize(i->elseBranch);
+        frameSize = countLocalsSize(i->thenBranch, frameSize);
+        return countLocalsSize(i->elseBranch, frameSize);
     }
     if (auto* whileStmt = dynamic_cast<While*>(stmt)) {
-        return countLocalsSize(whileStmt->body);
+        return countLocalsSize(whileStmt->body, frameSize);
     }
-    return 0;
+    return frameSize;
 }
 
 void CodeGen::compileStmt(Stmt* stmt) {
@@ -2114,9 +2194,9 @@ void CodeGen::compileStmt(Stmt* stmt) {
     if (auto* var = dynamic_cast<VarDecl*>(stmt)) {
         
         for (auto* init : var->vars) {
-            std::shared_ptr<Type> type = varInitType(init, var);
+            std::shared_ptr<Type> type = varInitType(init);
 
-            int off = allocLocal(init->resolvedSym, init->name, type);
+            int off = allocLocal(init->resolvedSym, type);
 
             if (type && type->kind == TypeKind::Class && classDecls.count(type->name) && classDecls[type->name]->destructor) {
                 classLocals.push_back({off, type->name});
@@ -2141,7 +2221,7 @@ void CodeGen::compileStmt(Stmt* stmt) {
                         if (structSizes.count(type->name)) size = structSizes[type->name];
                         if (size <= 0) size = 8;
                         text << "    mov rdi, " << size << "\n";
-                        text << "    call lang_alloc\n";
+                        emitAlignedCall("lang_alloc");
                         text << "    push rax\n";
                         text << "    mov rdi, rax\n";
                         text << "    mov rsi, [rsp + 8]\n";
@@ -2164,7 +2244,7 @@ void CodeGen::compileStmt(Stmt* stmt) {
             }
             else {
                 text << "    lea rdi, [rbp" << off << "]\n";
-                emitDefault("rdi", type);
+                emitDefaultAt("rdi", 0, type);
             }
         }
         return;
@@ -2192,7 +2272,7 @@ void CodeGen::compileStmt(Stmt* stmt) {
                 if (structSizes.count(targetType->name)) size = structSizes[targetType->name];
                 if (size <= 0) size = 8;
                 text << "    mov rdi, " << size << "\n";
-                text << "    call lang_alloc\n";
+                emitAlignedCall("lang_alloc");
                 text << "    push rax\n";
                 text << "    mov rdi, rax\n";
                 text << "    mov rsi, [rsp + 8]\n";
@@ -2304,7 +2384,7 @@ void CodeGen::compileClassConstruction(const std::string& className, const std::
         size = structSizes[className];
     }
     text << "    mov rdi, " << size << "\n";
-    text << "    call lang_alloc\n";
+    emitAlignedCall("lang_alloc");
     text << "    push rax\n";                            //  this
 
     //  Копируем байты дефолтного экземпляра класса в свежевыделенный объект,
@@ -2386,7 +2466,7 @@ void CodeGen::compileClassConstruction(const std::string& className, const std::
         if (sep != std::string::npos) {
             simpleClassName = simpleClassName.substr(sep + 2);
         }
-        text << "    call " << mangleQualifiedName(className) << "_" << simpleClassName << "\n";
+        emitAlignedCall(mangleQualifiedName(className) + "_" + simpleClassName);
     }
     text << "    pop rax\n";                             //  результат — указатель на объект
 }
@@ -2412,7 +2492,7 @@ void CodeGen::compileCompoundValue(Assign* assign, Expr* currentValue) {
         if (rhsIsChar) text << "    mov rsi, rsp\n";
         else           text << "    mov rsi, [rsp]\n";
         text << "    mov rdi, [rsp+8]\n";
-        text << "    call lang_strcat\n";
+        emitAlignedCall("lang_strcat");
         text << "    add rsp, 16\n";
         return;
     }
@@ -2481,7 +2561,7 @@ void CodeGen::compileCompoundValue(Assign* assign, Expr* currentValue) {
             text << "    jnz " << okLabel << "\n";
             text << "    lea rdi, [rel __rt_div_zero]\n";
             text << "    mov rsi, " << assign->line << "\n";
-            text << "    call lang_panic\n";
+            emitAlignedCall("lang_panic");
             text << okLabel << ":\n";
             if (isUnsigned) text << "    xor rdx, rdx\n    div rbx\n";
             else            text << "    cqo\n    idiv rbx\n";
@@ -2556,7 +2636,7 @@ void CodeGen::compileExpr(Expr* expr) {
         auto arrType = exprType(expr);
 
         if (!arrType) {
-            text << "    xor rax, rax\n";
+            codegenError(arrayLit->line, arrayLit->column, "array literal has no resolved type");
             return;
         }
 
@@ -2570,7 +2650,7 @@ void CodeGen::compileExpr(Expr* expr) {
             if (elemSize <= 0) elemSize = 8;
 
             text << "    mov rdi, 24\n";
-            text << "    call lang_alloc\n";
+            emitAlignedCall("lang_alloc");
             text << "    push rax\n"; // header
 
             if (n == 0) {
@@ -2583,7 +2663,7 @@ void CodeGen::compileExpr(Expr* expr) {
             }
 
             text << "    mov rdi, " << (n * elemSize) << "\n";
-            text << "    call lang_alloc\n";
+            emitAlignedCall("lang_alloc");
 
             text << "    mov rbx, [rsp]\n";
             text << "    mov [rbx], rax\n";
@@ -2621,11 +2701,11 @@ void CodeGen::compileExpr(Expr* expr) {
             if (elemSize <= 0) elemSize = 8;
 
             text << "    mov rdi, " << size << "\n";
-            text << "    call lang_alloc\n";
+            emitAlignedCall("lang_alloc");
             text << "    push rax\n";
 
             text << "    mov rdi, [rsp]\n";
-            emitDefault("rdi", arrType);
+            emitDefaultAt("rdi", 0, arrType);
 
             for (size_t i = 0; i < arrayLit->elements.size(); ++i) {
                 int off = (int)i * elemSize;
@@ -2648,7 +2728,7 @@ void CodeGen::compileExpr(Expr* expr) {
             return;
         }
 
-        text << "    xor rax, rax\n";
+        codegenError(arrayLit->line, arrayLit->column, "array literal resolved to non-array type");
         return;
     }
    
@@ -2658,16 +2738,26 @@ void CodeGen::compileExpr(Expr* expr) {
         if (size <= 0) size = 8;
 
         text << "    mov rdi, " << size << "\n";
-        text << "    call lang_alloc\n";
+        emitAlignedCall("lang_alloc");
         text << "    push rax\n";
-
-        // default всего объекта
-        text << "    mov rdi, [rsp]\n";
-        emitDefault("rdi", structType);
 
         std::string structName = structType ? structType->name : sl->name;
         auto& layout = structLayouts[structName];
         auto& types = structFieldTypes[structName];
+
+        // Сначала копируем текущие runtime defaults, затем накладываем явные поля литерала.
+        for (const auto& name : structFieldOrder[structName]) {
+            int off = 0;
+            if (layout.count(name)) off = layout[name];
+
+            std::shared_ptr<Type> fieldType = nullptr;
+            if (types.count(name)) fieldType = types[name];
+
+            text << "    mov rdi, [rsp]\n";
+            if (off != 0) text << "    add rdi, " << off << "\n";
+            text << "    lea rsi, [rel __default_" << mangleQualifiedName(structName) << "_" << name << "]\n";
+            emitCopy("rdi", "rsi", fieldType);
+        }
 
         for (auto& fi : sl->fields) {
             int off = 0;
@@ -2714,8 +2804,7 @@ void CodeGen::compileExpr(Expr* expr) {
        auto targetType = castExpr->resolvedType;
 
         if (!targetType) {
-            // После успешной семантики такого быть не должно.
-            compileExpr(castExpr->value);
+            codegenError(castExpr->line, castExpr->column, "cast expression has no resolved target type");
             return;
         }
 
@@ -2760,16 +2849,19 @@ void CodeGen::compileExpr(Expr* expr) {
             if (structSizes.count(id->name)) size = structSizes[id->name];
             else                              size = (int)structDecls[id->name]->fields.size() * 8;
             text << "    mov rdi, " << size << "\n";
-            text << "    call lang_alloc\n";
+            emitAlignedCall("lang_alloc");
             text << "    push rax\n";
             auto& layout = structLayouts[id->name];
+            auto& types = structFieldTypes[id->name];
             for (auto& field : structDecls[id->name]->fields) {
-                if (!field.defaultValue) continue;
-                text << "    mov rax, [rel __default_" << mangleQualifiedName(id->name) << "_" << field.name << "]\n";
-                text << "    mov rbx, [rsp]\n";
                 int off = 0;
                 if (layout.count(field.name)) off = layout[field.name];
-                text << "    mov [rbx+" << off << "], rax\n";
+                std::shared_ptr<Type> fieldType = nullptr;
+                if (types.count(field.name)) fieldType = types[field.name];
+                text << "    mov rdi, [rsp]\n";
+                if (off != 0) text << "    add rdi, " << off << "\n";
+                text << "    lea rsi, [rel __default_" << mangleQualifiedName(id->name) << "_" << field.name << "]\n";
+                emitCopy("rdi", "rsi", fieldType);
             }
             text << "    pop rax\n";
             return;
@@ -2918,7 +3010,7 @@ void CodeGen::compileExpr(Expr* expr) {
             else             text << "    mov rsi, [rsp]\n";     //  указатель-строка
             if (leftIsChar)  text << "    lea rdi, [rsp+8]\n";   //  адрес qword'а с символом на стеке
             else             text << "    mov rdi, [rsp+8]\n";
-            text << "    call lang_strcat\n";
+            emitAlignedCall("lang_strcat");
             text << "    add rsp, 16\n";
             return;
         }
@@ -2929,7 +3021,7 @@ void CodeGen::compileExpr(Expr* expr) {
             compileExpr(bin->right);
             text << "    mov rsi, rax\n";
             text << "    pop rdi\n";
-            text << "    call lang_streq\n";
+            emitAlignedCall("lang_streq");
             if (bin->op == Operand::NotEqual) {
                 text << "    xor rax, 1\n";
             }
@@ -3111,7 +3203,7 @@ void CodeGen::compileExpr(Expr* expr) {
                 text << "    jns " << nonNegativeLabel << "\n";
                 text << "    lea rdi, [rel __rt_negative_pow]\n";
                 text << "    mov rsi, " << bin->line << "\n";
-                text << "    call lang_panic\n";
+                emitAlignedCall("lang_panic");
                 text << nonNegativeLabel << ":\n";
                 text << "    mov rcx, rbx\n";
                 text << "    mov rbx, rax\n";
@@ -3131,7 +3223,7 @@ void CodeGen::compileExpr(Expr* expr) {
                 text << "    jnz " << okLabel << "\n";
                 text << "    lea rdi, [rel __rt_div_zero]\n";
                 text << "    mov rsi, " << bin->line << "\n";
-                text << "    call lang_panic\n";
+                emitAlignedCall("lang_panic");
                 text << okLabel << ":\n";
                 if (isUnsigned) text << "    xor rdx, rdx\n    div rbx\n";
                 else            text << "    cqo\n    idiv rbx\n";
@@ -3143,7 +3235,7 @@ void CodeGen::compileExpr(Expr* expr) {
                 text << "    jnz " << okLabel << "\n";
                 text << "    lea rdi, [rel __rt_div_zero]\n";
                 text << "    mov rsi, " << bin->line << "\n";
-                text << "    call lang_panic\n";
+                emitAlignedCall("lang_panic");
                 text << okLabel << ":\n";
                 if (isUnsigned) text << "    xor rdx, rdx\n    div rbx\n";
                 else            text << "    cqo\n    idiv rbx\n";
@@ -3198,14 +3290,48 @@ void CodeGen::compileExpr(Expr* expr) {
             }
 
             if (!objType || objType->kind != TypeKind::Class) {
+                codegenError(fc->line, fc->column, "method call target has no class resolved type");
                 return;
             }
 
             auto retType = fc->resolvedType ? fc->resolvedType : callReturnType(fc);
             bool returnsComposite = isCompositeMemoryType(retType);
 
+            int expectedMethodStackArgs = 0;
+            {
+                int scanIntIdx = 0;
+                int scanXmmIdx = 0;
+                size_t maxIntRegs = returnsComposite ? 4 : 5;
+
+                for (size_t i = 0; i < fc->args.size(); ++i) {
+                    std::shared_ptr<Type> argType = nullptr;
+                    if (fc->resolvedMethod && i < fc->resolvedMethod->params.size()) {
+                        argType = fc->resolvedMethod->params[i].type;
+                    }
+                    else {
+                        argType = exprType(fc->args[i]);
+                    }
+
+                    bool isFloat = argType && (argType->kind == TypeKind::Float32 || argType->kind == TypeKind::Float64);
+                    if (isFloat && scanXmmIdx < 8) {
+                        scanXmmIdx++;
+                    }
+                    else if ((size_t)scanIntIdx < maxIntRegs) {
+                        scanIntIdx++;
+                    }
+                    else {
+                        expectedMethodStackArgs++;
+                    }
+                }
+            }
+
+            int methodStackPadding = (expectedMethodStackArgs > 0 && expectedMethodStackArgs % 2 == 0) ? 8 : 0;
+
             compileExpr(fa->object);
             emitNullCheck("rax", fa->line);
+            if (methodStackPadding != 0) {
+                text << "    sub rsp, " << methodStackPadding << "\n";
+            }
             text << "    push rax\n"; // self
 
             for (int i = (int)fc->args.size() - 1; i >= 0; --i) {
@@ -3230,7 +3356,7 @@ void CodeGen::compileExpr(Expr* expr) {
                 int retSize = sizeOfType(retType);
                 if (retSize <= 0) retSize = 8;
                 text << "    mov rdi, " << retSize << "\n";
-                text << "    call lang_alloc\n";
+                emitAlignedCall("lang_alloc");
                 text << "    push rax\n";
             }
 
@@ -3288,10 +3414,16 @@ void CodeGen::compileExpr(Expr* expr) {
                 text << "    add rsp, 8\n"; // self
             }
 
-            text << "    call " << mangleQualifiedName(objType->name) << "_" << fa->field << "\n";
+            std::string methodLabel = mangleQualifiedName(objType->name) + "_" + fa->field;
+            if (stackArgs == 0) {
+                emitAlignedCall(methodLabel);
+            }
+            else {
+                text << "    call " << methodLabel << "\n";
+            }
 
             if (stackArgs > 0) {
-                text << "    add rsp, " << (stackArgs * 8 + 8) << "\n";
+                text << "    add rsp, " << (stackArgs * 8 + 8 + methodStackPadding) << "\n";
             }
 
             return;
@@ -3305,7 +3437,7 @@ void CodeGen::compileExpr(Expr* expr) {
         }
         else if (auto* na = dynamic_cast<NamespaceAccess*>(fc->callee)) {
             callName = na->member;
-            callLabel = mangleNamespaceAccess(na);
+            callLabel = symbolLabel(fc->resolvedCallee, na->nameSpace + "::" + na->member);
         }
         else return;
 
@@ -3333,31 +3465,31 @@ void CodeGen::compileExpr(Expr* expr) {
             auto inputType = fc->resolvedType ? fc->resolvedType : callReturnType(fc);
 
             if (inputType && inputType->kind == TypeKind::String) {
-                text << "    call lang_input\n";
+                emitAlignedCall("lang_input");
                 return;
             }
 
             if (inputType && inputType->kind == TypeKind::Char) {
-                text << "    call lang_input\n";
+                emitAlignedCall("lang_input");
                 text << "    mov rdi, rax\n";
                 text << "    mov rsi, " << fc->line << "\n";
-                text << "    call lang_parse_input_char\n";
+                emitAlignedCall("lang_parse_input_char");
                 return;
             }
 
             if (isCodegenIntType(inputType)) {
-                text << "    call lang_input\n";
+                emitAlignedCall("lang_input");
                 text << "    mov rdi, rax\n";
                 text << "    mov rsi, " << fc->line << "\n";
-                text << "    call lang_parse_input_int\n";
+                emitAlignedCall("lang_parse_input_int");
                 return;
             }
 
             if (isCodegenFloatType(inputType)) {
-                text << "    call lang_input\n";
+                emitAlignedCall("lang_input");
                 text << "    mov rdi, rax\n";
                 text << "    mov rsi, " << fc->line << "\n";
-                text << "    call lang_parse_input_float\n";
+                emitAlignedCall("lang_parse_input_float");
                 if (inputType->kind == TypeKind::Float32) {
                     text << "    movq xmm0, rax\n";
                     text << "    cvtsd2ss xmm0, xmm0\n";
@@ -3371,7 +3503,7 @@ void CodeGen::compileExpr(Expr* expr) {
                 text << "    mov rdi, " << typeCode << "\n";
                 text << "    mov rsi, " << inputType->arraySize << "\n";
                 text << "    mov rdx, " << fc->line << "\n";
-                text << "    call lang_input_array_fixed\n";
+                emitAlignedCall("lang_input_array_fixed");
                 return;
             }
 
@@ -3379,11 +3511,11 @@ void CodeGen::compileExpr(Expr* expr) {
                 int typeCode = codegenInputTypeCode(inputType->elementType);
                 text << "    mov rdi, " << typeCode << "\n";
                 text << "    mov rsi, " << fc->line << "\n";
-                text << "    call lang_input_array_dyn\n";
+                emitAlignedCall("lang_input_array_dyn");
                 return;
             }
 
-            text << "    xor rax, rax\n";
+            codegenError(fc->line, fc->column, "input() has no supported resolved return type");
             return;
         }
 
@@ -3427,7 +3559,7 @@ void CodeGen::compileExpr(Expr* expr) {
                         else {
                             text << "    movsd xmm0, [rbx + r12*8]\n";
                         }
-                        text << "    call print_float\n";
+                        emitAlignedCall("print_float");
                     }
                     else {
                         if (elemSz == 1) {
@@ -3445,15 +3577,15 @@ void CodeGen::compileExpr(Expr* expr) {
                         else {
                             text << "    mov rdi, [rbx + r12*8]\n";
                         }
-                        if (elemType && elemType->kind == TypeKind::String)    text << "    call print_string\n";
-                        else if (elemType && elemType->kind == TypeKind::Bool) text << "    call print_bool\n";
-                        else if (elemType && elemType->kind == TypeKind::Char) text << "    call print_char\n";
-                        else                                                   text << "    call print_int\n";
+                        if (elemType && elemType->kind == TypeKind::String)    emitAlignedCall("print_string");
+                        else if (elemType && elemType->kind == TypeKind::Bool) emitAlignedCall("print_bool");
+                        else if (elemType && elemType->kind == TypeKind::Char) emitAlignedCall("print_char");
+                        else                                                   emitAlignedCall("print_int");
                     }
                     text << "    inc r12\n";
                     text << "    cmp r12, r13\n";
                     text << "    je .print_arr_end_" << lbl << "\n";
-                    text << "    call print_space\n";
+                    emitAlignedCall("print_space");
                     text << "    jmp .print_arr_loop_" << lbl << "\n";
                     text << ".print_arr_end_" << lbl << ":\n";
                 }
@@ -3468,20 +3600,20 @@ void CodeGen::compileExpr(Expr* expr) {
                         else {
                             text << "    movq xmm0, rax\n";
                         }
-                        text << "    call print_float\n";
+                        emitAlignedCall("print_float");
                     }
                     else {
                         text << "    mov rdi, rax\n";
-                        if (argType && argType->kind == TypeKind::Bool)        text << "    call print_bool\n";
-                        else if (argType && argType->kind == TypeKind::String) text << "    call print_string\n";
-                        else if (argType && argType->kind == TypeKind::Char)   text << "    call print_char\n";
-                        else                                                   text << "    call print_int\n";
+                        if (argType && argType->kind == TypeKind::Bool)        emitAlignedCall("print_bool");
+                        else if (argType && argType->kind == TypeKind::String) emitAlignedCall("print_string");
+                        else if (argType && argType->kind == TypeKind::Char)   emitAlignedCall("print_char");
+                        else                                                   emitAlignedCall("print_int");
                     }
                 }
                 if (i + 1 < fc->args.size())
-                    text << "    call print_space\n";
+                    emitAlignedCall("print_space");
             }
-            text << "    call print_newline\n";
+            emitAlignedCall("print_newline");
             return;
         }
         //  push(elem, arr) — arr поддерживается как локальная DynArray или поле класса
@@ -3522,7 +3654,7 @@ void CodeGen::compileExpr(Expr* expr) {
                 text << "    mov rdi, r8\n";
                 text << "    imul rdi, " << elemSize << "\n";
                 text << "    push r8\n";
-                text << "    call lang_alloc\n";
+                emitAlignedCall("lang_alloc");
                 text << "    pop r8\n";
 
                 text << "    mov rbx, [rsp]\n";
@@ -3558,15 +3690,21 @@ void CodeGen::compileExpr(Expr* expr) {
                 return;
             }
 
-            //  Вычислим элемент первым (может клобберить rdi), сохраним на стеке
-            compileExpr(fc->args[0]);
+            int elemSize = codegenDynArrayElemSize(elemType);
+            if (elemSize <= 0) elemSize = 8;
+
+            //  Scalar-элементы тоже пишем sized-путём, чтобы layout совпадал
+            //  с индексированием DynArray по реальному размеру элемента.
+            compileExprAs(fc->args[0], elemType);
             text << "    push rax\n";
             if (!emitDynArrayAddr(fc->args[1], "rdi")) {
                 text << "    add rsp, 8\n";
                 return;
             }
-            text << "    pop rsi\n";                             //  rsi = элемент
-            text << "    call lang_push\n";
+            text << "    mov rsi, rsp\n";
+            text << "    mov rdx, " << elemSize << "\n";
+            emitAlignedCall("lang_push_sized");
+            text << "    add rsp, 8\n";
             return;
         }
         //  pop(arr) → rax = последний элемент
@@ -3577,10 +3715,14 @@ void CodeGen::compileExpr(Expr* expr) {
             text << "    mov rsi, " << fc->line << "\n";
             if (isCompositeMemoryType(elemType)) {
                 text << "    mov rdx, " << sizeOfType(elemType) << "\n";
-                text << "    call lang_pop_sized\n";
+                emitAlignedCall("lang_pop_sized");
             }
             else {
-                text << "    call lang_pop\n";
+                int elemSize = codegenDynArrayElemSize(elemType);
+                if (elemSize <= 0) elemSize = 8;
+                text << "    mov rdx, " << elemSize << "\n";
+                emitAlignedCall("lang_pop_sized");
+                emitLoad("[rax]", elemType);
             }
             return;
         }
@@ -3598,7 +3740,7 @@ void CodeGen::compileExpr(Expr* expr) {
             else if (argType && argType->kind == TypeKind::String) {
                 compileExpr(fc->args[0]);
                 text << "    mov rdi, rax\n";
-                text << "    call lang_strlen\n";
+                emitAlignedCall("lang_strlen");
             }
             return;
         }
@@ -3608,6 +3750,42 @@ void CodeGen::compileExpr(Expr* expr) {
         auto retType = fc->resolvedType ? fc->resolvedType : callReturnType(fc);
         bool returnsComposite = !isExternC && isCompositeMemoryType(retType);
         int qwordsPushed = 0;    //  Каждый аргумент кладём как один qword: scalar value или composite address.
+
+        static const char* intRegs[6] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
+
+        auto callArgType = [&](size_t index) -> std::shared_ptr<Type> {
+            if (funcInfo && index < funcInfo->params.size()) {
+                return funcInfo->params[index].type;
+            }
+            return exprType(fc->args[index]);
+        };
+
+        int expectedStackArgCount = 0;
+        {
+            int scanIntIdx = returnsComposite ? 1 : 0;
+            int scanXmmIdx = 0;
+
+            for (size_t i = 0; i < fc->args.size(); ++i) {
+                auto argType = callArgType(i);
+                bool isFloat = argType &&
+                    (argType->kind == TypeKind::Float32 || argType->kind == TypeKind::Float64);
+
+                if (isFloat && scanXmmIdx < 8) {
+                    scanXmmIdx++;
+                }
+                else if (scanIntIdx < 6) {
+                    scanIntIdx++;
+                }
+                else {
+                    expectedStackArgCount++;
+                }
+            }
+        }
+
+        int stackArgPadding = (expectedStackArgCount % 2 != 0) ? 8 : 0;
+        if (stackArgPadding != 0) {
+            text << "    sub rsp, " << stackArgPadding << "\n";
+        }
        
         // Пушим справа налево, чтобы потом доставать слева направо.
         for (int i = (int)fc->args.size() - 1; i >= 0; --i) {
@@ -3634,12 +3812,11 @@ void CodeGen::compileExpr(Expr* expr) {
             int retSize = sizeOfType(retType);
             if (retSize <= 0) retSize = 8;
             text << "    mov rdi, " << retSize << "\n";
-            text << "    call lang_alloc\n";
+            emitAlignedCall("lang_alloc");
             text << "    push rax\n";
             qwordsPushed++;
         }
 
-        static const char* intRegs[6] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
         int intIdx = 0, xmmIdx = 0;
         int qwordsConsumed = 0;    //  Сколько qword'ов мы сняли со стэка в регистры
 
@@ -3692,25 +3869,24 @@ void CodeGen::compileExpr(Expr* expr) {
         }
 
         int stackArgCount = qwordsPushed - qwordsConsumed;
+        int stackCleanupBytes = stackArgCount * 8 + stackArgPadding;
 
         if (isExternC) {
             externCFunctions.insert(callLabel);
-            if (stackArgCount % 2 != 0) text << "    sub rsp, 8\n";
             if (isVariadic) text << "    mov al, " << xmmIdx << "\n";
             text << "    call " << callLabel << "\n";
-            if (stackArgCount % 2 != 0) text << "    add rsp, 8\n";
-            if (stackArgCount > 0)      text << "    add rsp, " << (stackArgCount * 8) << "\n";
+            if (stackCleanupBytes > 0) text << "    add rsp, " << stackCleanupBytes << "\n";
         } else {
             //  input/exit/panic живут в рантайме под lang_-именами (чтобы не конфликтовать с libc).
             //  Всё остальное — пользовательские/namespace/метод-функции без префикса.
             bool isRuntimeBuiltin = (callName == "input" || callName == "exit" || callName == "panic");
             if (isRuntimeBuiltin) text << "    call lang_" << callName << "\n";
             else                  text << "    call " << callLabel << "\n";
-            if (stackArgCount > 0) text << "    add rsp, " << (stackArgCount * 8) << "\n";
+            if (stackCleanupBytes > 0) text << "    add rsp, " << stackCleanupBytes << "\n";
         }
         return;
     }
-    //  String / ArrayLiteral / NewExpr / ... — в следующих фазах
+    codegenError(expr->line, expr->column, "unsupported expression node in codegen");
 }
 
 // Финальная сборка
@@ -3739,9 +3915,6 @@ std::expected<void, std::string> CodeGen::finalize(const std::string& outPath) {
     if (!out)
         return std::unexpected("codegen: cannot open '" + asmPath + "' for writing");
 
-    if (!data.str().empty()) {
-        out << "section .data\n" << data.str() << "\n";
-    }
     if (!rodata.str().empty()) {
         out << "section .rodata\n" << rodata.str() << "\n";
     }

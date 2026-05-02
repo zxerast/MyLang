@@ -210,7 +210,7 @@ struct StructField{
     bool isAuto = false;
     TypeName *typeName = nullptr;
     std::string name;
-    Expr* defaultValue = nullptr;  //  Значение по умолчанию (может быть nullptr)
+    Expr* defaultValue = nullptr;  //  Значение по умолчанию 
     std::shared_ptr<Type> resolvedType = nullptr;
 };
 

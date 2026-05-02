@@ -25,18 +25,16 @@ struct GlobalVarInit {
 };
 
 class CodeGen {     //  Буферы секций — собираем в них инструкции, склеиваем в finalize()
-    std::ostringstream data;        //  инициализированные глобальные переменные
     std::ostringstream rodata;      //  строковые и неизменяемые литералы
     std::ostringstream bss;         //  неинициализированные глобальные переменные
     std::ostringstream text;        //  код
 
     int labelCounter = 0;           //  Счётчик для уникальных меток .L0, .L1, ...
     int stringCounter = 0;          //  Счётчик строковых литералов .str0, .str1, ...
-    int arrayCounter  = 0;          //  Счётчик литералов массивов
-    int structCounter = 0;          //  Счётчик временных слотов для структур/классов
 
     bool currentHasSRet = false;
     int currentSRetOffset = 0;
+    int currentCallAlignOffset = 0;
 
     std::unordered_map<std::shared_ptr<Symbol>, LocalVar> localsBySymbol;
     std::unordered_map<std::shared_ptr<Symbol>, std::shared_ptr<Type>> globalsBySymbol;
@@ -49,9 +47,6 @@ class CodeGen {     //  Буферы секций — собираем в них
     std::vector<LoopLabels> loopStack;  //  Метки break и continue
 
     std::shared_ptr<Type> currentReturnType = nullptr;
-
-    
-    int storageSizeOfType(const std::shared_ptr<Type>& type) const;
 
     static bool isSignedIntType(const std::shared_ptr<Type>& type);
     static bool isUnsignedIntType(const std::shared_ptr<Type>& type);
@@ -76,8 +71,9 @@ class CodeGen {     //  Буферы секций — собираем в них
     void emitCopy(const std::string& dstReg, const std::string& srcReg, const std::shared_ptr<Type>& type);
 
     // dstReg — регистр, в котором лежит адрес объекта
-    void emitDefault(const std::string& dstReg, const std::shared_ptr<Type>& type);
     void emitDefaultAt(const std::string& dstReg, int offset, const std::shared_ptr<Type>& type);
+    void emitRuntimeDefaultAt(const std::string& dstReg, int offset, const std::shared_ptr<Type>& type);
+    void emitAlignedCall(const std::string& target);
 
     // expr -> rax, приведённый к targetType
     void compileExprAs(Expr* expr, const std::shared_ptr<Type>& targetType);
@@ -111,18 +107,17 @@ class CodeGen {     //  Буферы секций — собираем в них
     std::string internString(const std::string& str);       //  Добавляет строку в пул, возвращает метку
 
     int sizeOfType(const std::shared_ptr<Type>& type) const;   //  Размер типа в байтах с учётом выравнивания
-    static bool isDynArrayTypeName(TypeName* name);                    //  Верхнеуровневый T[]-тип
-    static bool isFloatTypeName(TypeName* name);                       //  float/float32/float64 без суффиксов
     
     std::shared_ptr<Type> paramType(FuncDecl* func, size_t index) const;
     std::shared_ptr<Type> returnType(FuncDecl* func) const;
     std::shared_ptr<Type> exprType(Expr* e) const;
-    std::shared_ptr<Type> varInitType(VarInit* v, VarDecl* decl) const;
+    std::shared_ptr<Type> varInitType(VarInit* v) const;
     std::shared_ptr<Type> paramType(const Param& p) const;
     std::shared_ptr<Type> fieldType(FieldAccess* f) const;
     std::shared_ptr<Type> callReturnType(FuncCall* call) const;
     std::shared_ptr<FuncInfo> callFuncInfo(FuncCall* call) const;
     std::string symbolLabel(const std::shared_ptr<Symbol>& sym, const std::string& fallbackName) const;
+    std::string functionLabel(FuncDecl* func) const;
     std::string mangleQualifiedName(const std::string& name) const;
     std::string mangleNamespaceAccess(const NamespaceAccess* access) const;
 
@@ -130,11 +125,11 @@ class CodeGen {     //  Буферы секций — собираем в них
     void compileGlobalInit(VarDecl* decl, VarInit* var);                           //  Инициализация одной глобалки в прологе main
     bool emitDynArrayAddr(Expr* e, const char* reg);                              //  Адрес DynArray-источника (локалка / self-поле / ClassName.field / глобалка) в reg
 
-    int allocLocal(const std::shared_ptr<Symbol>& sym, const std::string& nameHint, const std::shared_ptr<Type>& type);
+    int allocLocal(const std::shared_ptr<Symbol>& sym, const std::shared_ptr<Type>& type);
 
     const LocalVar* findLocal(const std::shared_ptr<Symbol>& sym) const;
 
-    std::string globalLabel(const std::shared_ptr<Symbol>& sym, const std::string& nameHint);
+    std::string globalLabel(const std::shared_ptr<Symbol>& sym);
     bool isGlobal(const std::shared_ptr<Symbol>& sym) const;
 
     void collectLayout(const std::string& name, const std::vector<StructField>& fields); //  Запоминает layout полей struct/class (поле = qword)
@@ -142,15 +137,12 @@ class CodeGen {     //  Буферы секций — собираем в них
     void compileDecl(Stmt* decl, const std::string& classPrefix);                        //  Компилирует функции/методы; classPrefix добавляется к имени символа
 
     std::vector<std::string> codegenErrors;
+    void codegenError(int line, int column, const std::string& message);
 
-    bool hasRuntimeSizedArray(const std::shared_ptr<Type>& type) const;
-    void validateCodegenType(const std::shared_ptr<Type>& type, int line, int column, const std::string& where);
-    void validateDeclTypes(Stmt* decl);
-    void validateStmtTypes(Stmt* stmt);
-
+    int advanceLocalFrameSize(int frameSize, const std::shared_ptr<Type>& type) const;
     void compileFunction(FuncDecl* func, bool isMethod = false);   //  Компиляция функции/метода; isMethod=true резервирует self в rdi
     void compileMethod(FuncDecl* f, const std::string& labelName);
-    int countLocalsSize(Stmt* size);    //  Первый проход: суммарный размер локалок в теле (8-байтное выравнивание)
+    int countLocalsSize(Stmt* size, int frameSize);    //  Dry-run layout локалок тем же алгоритмом, что allocLocal
     void compileStmt(Stmt* stmt);   //  Компиляция одного стейтмента
     void compileExpr(Expr* expr);   //  Компиляция выражения — результат в rax (для int/ptr)
     void compileCompoundValue(Assign* assign, Expr* currentValue);  //  target op= value, результат в rax

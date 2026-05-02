@@ -2,3 +2,8 @@
 CODEGEN_PLAN.md
 CLAUDE.md
 problems.txt
+.codex
+tests/
+executables/
+.agents
+Tasks.lang

@@ -23,14 +23,8 @@ struct Parser {
     // Разбирает имя типа:
     // int, Point, int[], int[3], int[size], int[size + 1], int[][], int[3][4]
     std::expected<TypeName*, std::string> parseTypeName() {
-        if (i >= source.size() ||
-            (source[i].type != TokenType::TypeName && source[i].type != TokenType::Iden)) {
-            return std::unexpected(
-                filePath + ":" +
-                std::to_string(curLine()) + ":" +
-                std::to_string(curColumn()) +
-                ": error: expected type name"
-            );
+        if (i >= source.size() || (source[i].type != TokenType::TypeName && source[i].type != TokenType::Iden)) {
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected type name");
         }
 
         auto* type = new TypeName();
@@ -41,12 +35,7 @@ struct Parser {
 
             if (i >= source.size() || source[i].type != TokenType::Iden) {
                 delete type;
-                return std::unexpected(
-                    filePath + ":" +
-                    std::to_string(curLine()) + ":" +
-                    std::to_string(curColumn()) +
-                    ": error: expected identifier after '::' in type name"
-                );
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected identifier after '::' in type name");
             }
 
             type->base += "::";
@@ -80,12 +69,7 @@ struct Parser {
 
             if (i >= source.size() || source[i].type != TokenType::RightBracket) {
                 delete type;
-                return std::unexpected(
-                    filePath + ":" +
-                    std::to_string(curLine()) + ":" +
-                    std::to_string(curColumn()) +
-                    ": error: expected ']' after array size"
-                );
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ']' after array size");
             }
 
             i++; // съели ']'
@@ -96,21 +80,15 @@ struct Parser {
         return type;
     } 
 
-    std::expected<TypeName*, std::string> parseValueType() {
-        // Тип значения: переменная, поле, параметр. void запрещён.
-        auto typeName = parseTypeName();
+    std::expected<TypeName*, std::string> parseValueType() {    //  Прокладка для блокировки типа void для всего кроме функций
+        auto typeName = parseTypeName();            //  Функции напрямую вызывают TypeName а всё остальное через блокиратор войда
 
         if (!typeName) {
             return std::unexpected(typeName.error());
         }
 
-        if ((*typeName)->base == "void" && (*typeName)->suffixes.empty()) {
-            return std::unexpected(
-                filePath + ":" +
-                std::to_string(curLine()) + ":" +
-                std::to_string(curColumn()) +
-                ": error: variable, field or parameter cannot have type 'void'"
-            );
+        if ((*typeName)->base == "void") {
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: variable, field or parameter cannot have type 'void'");
         }
 
         return *typeName;
@@ -242,16 +220,10 @@ struct Parser {
                 // составное присваивание: lvalue += expr; -= *= /= %=
                 if (i < source.size() && isAssignOperator(source[i].type)) {
                     if (!isLValueSyntax(*expr)) {
-                        return std::unexpected(
-                            filePath + ":" +
-                            std::to_string((*expr)->line) + ":" +
-                            std::to_string((*expr)->column) +
-                            ": error: left side of assignment must be an lvalue"
-                        );
+                        return std::unexpected(filePath + ":" + std::to_string((*expr)->line) + ":" + std::to_string((*expr)->column) + ": error: left side of assignment must be an lvalue");
                     }
 
-                    TokenType assignToken = source[i].type;
-                    AssignOp assignOp = tokenToAssignOp(assignToken);
+                    AssignOp assignOp = tokenToAssignOp(source[i].type);
 
                     i++; // съели '=', '+=', '-=', '*=', '/=', '%='
 
@@ -261,12 +233,7 @@ struct Parser {
                     }
 
                     if (i >= source.size() || source[i].type != TokenType::Separator) {
-                        return std::unexpected(
-                            filePath + ":" +
-                            std::to_string(curLine()) + ":" +
-                            std::to_string(curColumn()) +
-                            ": error: expected ';' after assignment"
-                        );
+                        return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ';' after assignment" );
                     }
                     i++;
 
@@ -282,12 +249,7 @@ struct Parser {
 
         // выражение как инструкция: expr ;
         if (i >= source.size() || source[i].type != TokenType::Separator) {
-            return std::unexpected(
-                filePath + ":" +
-                std::to_string(curLine()) + ":" +
-                std::to_string(curColumn()) +
-                ": error: expected ';' after expression"
-            );
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected ';' after expression");
         }
         i++;
 
@@ -338,7 +300,8 @@ struct Parser {
                     return std::unexpected(elseIf.error());
                 }
                 elseStmt = *elseIf;
-            } else {
+            } 
+            else {
                 if (i >= source.size() || source[i].type != TokenType::LeftBrace){
                     return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '{' after else");
                 }
@@ -1719,12 +1682,7 @@ struct Parser {
             }
             else {
                 delete node;
-                return std::unexpected(
-                    filePath + ":" +
-                    std::to_string(curLine()) + ":" +
-                    std::to_string(curColumn()) +
-                    ": error: invalid char literal '" + lex + "'"
-                );
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: invalid char literal '" + lex + "'");
             }
 
             i++; // съели char literal
@@ -1739,12 +1697,7 @@ struct Parser {
             i++; // съели 'cast'
 
             if (i >= source.size() || source[i].type != TokenType::Less){
-                return std::unexpected(
-                    filePath + ":" +
-                    std::to_string(curLine()) + ":" +
-                    std::to_string(curColumn()) +
-                    ": error: expected '<' after cast"
-                );
+                return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: expected '<' after cast");
             }
 
             i++; // съели '<'
@@ -1947,8 +1900,7 @@ std::expected<std::vector<Stmt*>, std::string> parse(const std::vector<Token>& s
     std::vector<Stmt*> declarations;
 
     // 1. Сначала парсим ВСЕ import
-    while (head.i < source.size() &&
-           source[head.i].type == TokenType::Import) {
+    while (head.i < source.size() && source[head.i].type == TokenType::Import) {
 
         auto decl = head.parseImportDecl();
         if (!decl) {
@@ -1959,17 +1911,11 @@ std::expected<std::vector<Stmt*>, std::string> parse(const std::vector<Token>& s
     }
 
     // 2. Затем обычные top_decl
-    while (head.i < source.size() &&
-           source[head.i].type != TokenType::End) {
+    while (head.i < source.size() && source[head.i].type != TokenType::End) {
 
         // запрет import не в начале
         if (source[head.i].type == TokenType::Import) {
-            return std::unexpected(
-                filePath + ":" +
-                std::to_string(head.curLine()) + ":" +
-                std::to_string(head.curColumn()) +
-                ": error: import must appear before all declarations"
-            );
+            return std::unexpected(filePath + ":" + std::to_string(head.curLine()) + ":" + std::to_string(head.curColumn()) + ": error: import must appear before all declarations");
         }
 
         auto decl = head.parseTopDecl();
