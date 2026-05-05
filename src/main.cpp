@@ -82,22 +82,46 @@ int main(int argc, char* argv[]){
     Program program;
     program.decls = *nodes;
 
-    /*if (dumpAst){
+    if (dumpAst){
         for (Stmt* decl : program.decls){
             std::string kind = "Unknown";
             std::string name;
-            if (auto* f = dynamic_cast<FuncDecl*>(decl))        { kind = "FuncDecl";      name = f->name; }
-            else if (auto* s = dynamic_cast<StructDecl*>(decl)) { kind = "StructDecl";    name = s->name; }
-            else if (auto* c = dynamic_cast<ClassDecl*>(decl))  { kind = "ClassDecl";     name = c->name; }
-            else if (auto* v = dynamic_cast<VarDecl*>(decl))    { kind = "VarDecl";       name = v->name; }
-            else if (auto* t = dynamic_cast<TypeAlias*>(decl))  { kind = "TypeAlias";     name = t->alias; }
-            else if (auto* n = dynamic_cast<NamespaceDecl*>(decl)) { kind = "NamespaceDecl"; name = n->name; }
-            else if (auto* im = dynamic_cast<ImportDecl*>(decl)){ kind = "ImportDecl";    name = im->path; }
-            else if (dynamic_cast<ExportDecl*>(decl))           { kind = "ExportDecl"; }
-            std::cout << sourcePath << ":" << decl->line << ":" << decl->column
-                      << "\t" << kind << "\t" << name << "\n";
+
+            if (auto* f = dynamic_cast<FuncDecl*>(decl)) {
+                kind = "FuncDecl";      
+                name = f->name; 
+            }
+            else if (auto* s = dynamic_cast<StructDecl*>(decl)) { 
+                kind = "StructDecl";    
+                name = s->name; 
+            }
+            else if (auto* c = dynamic_cast<ClassDecl*>(decl)) { 
+                kind = "ClassDecl";     
+                name = c->name; 
+            }
+            else if (auto* v = dynamic_cast<VarDecl*>(decl)) { 
+                kind = "VarDecl";       
+                name = v->name; 
+            }
+            else if (auto* t = dynamic_cast<TypeAlias*>(decl)) {
+                kind = "TypeAlias";     
+                name = t->alias; 
+            }
+            else if (auto* n = dynamic_cast<NamespaceDecl*>(decl)) { 
+                kind = "NamespaceDecl"; 
+                name = n->name; 
+            }
+            else if (auto* im = dynamic_cast<ImportDecl*>(decl)) { 
+                kind = "ImportDecl";    
+                name = im->path; 
+            }
+            else if (dynamic_cast<ExportDecl*>(decl)) { 
+                kind = "ExportDecl"; 
+            }
+            
+            std::cout << sourcePath << ":" << decl->line << ":" << decl->column << "\t" << kind << "\t" << name << "\n";
         }
-    }*/
+    }
 
     SemanticAnalyzer analyzer;
     auto result = analyzer.analyze(&program, sourcePath);

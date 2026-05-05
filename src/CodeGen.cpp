@@ -19,7 +19,7 @@ std::string CodeGen::internString(const std::string& str) { //  Заполнен
     std::string label = "str" + std::to_string(stringCounter++);    //  Ставим метку
     stringPool[str] = label;
 
-    rodata << label << ": db `";    //  Любая строка это double-word
+    rodata << label << ": db `";    
     for (unsigned char c : str) {
         if (c == '`' || c == '\\') rodata << '\\' << c;
         else if (c == '\n') rodata << "\\n";
@@ -203,7 +203,7 @@ std::shared_ptr<Type> CodeGen::exprType(Expr* e) const {
         return nullptr;
     }
 
-    // Главный источник истины: тип, проставленный семантикой.
+    // Тип, проставленный семантикой.
     if (e->resolvedType) {
         return e->resolvedType;
     }
@@ -256,9 +256,6 @@ std::shared_ptr<Type> CodeGen::exprType(Expr* e) const {
         return nullptr;
     }
 
-    // ВАЖНО:
-    // CastExpr, StructLiteral, ArrayLiteral, Binary, Unary и т.д. не реконструируем здесь.
-    // Их тип обязан быть в e->resolvedType после семантики.
     return nullptr;
 }
 
@@ -638,8 +635,7 @@ static std::shared_ptr<Type> codegenCommonNumericType(const std::shared_ptr<Type
         return codegenIntBitWidth(a) >= codegenIntBitWidth(b) ? a : b;
     }
 
-    if ((isCodegenSignedIntType(a) && isCodegenUnsignedIntType(b)) ||
-        (isCodegenUnsignedIntType(a) && isCodegenSignedIntType(b))) {
+    if ((isCodegenSignedIntType(a) && isCodegenUnsignedIntType(b)) || (isCodegenUnsignedIntType(a) && isCodegenSignedIntType(b))) {
         auto signedType = isCodegenSignedIntType(a) ? a : b;
         auto unsignedType = isCodegenUnsignedIntType(a) ? a : b;
         int signedBits = codegenIntBitWidth(signedType);
@@ -1020,9 +1016,7 @@ void CodeGen::emitCopy(const std::string& dstReg, const std::string& srcReg, con
 
     // dynamic array: deep-copy header + heap buffer
     if (type->kind == TypeKind::DynArray) {
-        int elemSize = isCompositeMemoryType(type->elementType)
-            ? sizeOfType(type->elementType)
-            : codegenDynArrayElemSize(type->elementType);
+        int elemSize = isCompositeMemoryType(type->elementType) ? sizeOfType(type->elementType) : codegenDynArrayElemSize(type->elementType);
         if (elemSize <= 0) elemSize = 8;
 
         std::string emptyLabel = newLabel("dyn_empty");
@@ -1059,6 +1053,7 @@ void CodeGen::emitCopy(const std::string& dstReg, const std::string& srcReg, con
 
         text << "    mov rdi, [rsp + 8]\n";
         text << "    mov rdi, [rdi]\n";
+
         if (elemSize != 1) {
             text << "    mov rdx, rcx\n";
             text << "    imul rdx, " << elemSize << "\n";
@@ -1070,6 +1065,7 @@ void CodeGen::emitCopy(const std::string& dstReg, const std::string& srcReg, con
 
         text << "    mov rsi, [rsp]\n";
         text << "    mov rsi, [rsi]\n";
+
         if (elemSize != 1) {
             text << "    mov rdx, rcx\n";
             text << "    imul rdx, " << elemSize << "\n";
@@ -1749,6 +1745,7 @@ void CodeGen::compileDecl(Stmt* decl, const std::string& classPrefix) {
         std::string saveClassName = classDecl->name;
         classDecl->name = qualifiedClassName;
         currentClass = classDecl;
+        
         if (classDecl->constructor) {
             compileMethod(classDecl->constructor, mangledClassName + "_" + saveClassName);
         }
