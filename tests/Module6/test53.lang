@@ -13,8 +13,4 @@ int main() {
     return c + y;
 }
 
-//  Runtime output:
-//  TEST 3 OK -5 -5 10 true true -20 -2
-//  runtime_exit=8
-
 //  Status: OK

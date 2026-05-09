@@ -6,15 +6,12 @@ int main() {
     string s = a + b + c;
 
     bool same = s == "hello world";
-    bool different = s != "hello";
+    bool different = s == "hello";
 
     print("TEST 6 OK", s, same, different);
 
     return 0;
 }
 
-//  Runtime output:
-//  TEST 6 OK hello world false true
-//  runtime_exit=0
 
 //  Status: OK

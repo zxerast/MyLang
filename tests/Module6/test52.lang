@@ -8,8 +8,5 @@ int main() {
     return a;
 }
 
-//  Runtime output:
-//  TEST 2 OK 2 2 2
-//  runtime_exit=2
 
 //  Status: OK

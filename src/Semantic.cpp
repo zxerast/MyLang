@@ -682,7 +682,7 @@ void SemanticAnalyzer::registerBuiltins() {
 
 
 
-std::optional<long long> SemanticAnalyzer::evalConstIntExpr(Expr* expr) {
+std::optional<long long> SemanticAnalyzer::evalConstIntExpr(Expr* expr) {   //  Сразу вычисляем константное выражение, если получится
     if (!expr) {
         return std::nullopt;
     }
@@ -692,7 +692,7 @@ std::optional<long long> SemanticAnalyzer::evalConstIntExpr(Expr* expr) {
             return std::nullopt;
         }
 
-        return static_cast<long long>(num->value);
+        return static_cast<long long>(num->value);  //  Число берём как есть
     }
 
     if (auto* id = dynamic_cast<Identifier*>(expr)) {
@@ -702,27 +702,27 @@ std::optional<long long> SemanticAnalyzer::evalConstIntExpr(Expr* expr) {
             return std::nullopt;
         }
 
-        return sym->intConstValue;
+        return sym->intConstValue;  //  Идентификатор ищем в таблице
     }
 
     if (auto* ns = dynamic_cast<NamespaceAccess*>(expr)) {
-        auto sym = resolveNamespaceAccess(ns);
+        auto sym = resolveQualifiedSymbol(ns->nameSpace, ns->member);
 
         if (!sym || !sym->isConst || !sym->intConstValue.has_value()) {
             return std::nullopt;
         }
 
-        return sym->intConstValue;
+        return sym->intConstValue;  //  Значение из пространства имён ищем в пространстве имён, ничего себе
     }
 
     if (auto* unary = dynamic_cast<Unary*>(expr)) {
-        auto value = evalConstIntExpr(unary->operand);
+        auto value = evalConstIntExpr(unary->operand);  //  Рекурсивно вычисляем операнд
 
         if (!value.has_value()) {
             return std::nullopt;
         }
 
-        switch (unary->op) {
+        switch (unary->op) {        //  И применяем ему унарную операцию
             case Operand::UnaryPlus:
                 return *value;
 
@@ -735,14 +735,14 @@ std::optional<long long> SemanticAnalyzer::evalConstIntExpr(Expr* expr) {
     }
 
     if (auto* bin = dynamic_cast<Binary*>(expr)) {
-        auto left = evalConstIntExpr(bin->left);
+        auto left = evalConstIntExpr(bin->left);    //  Рекурсивно считаем оба операнда
         auto right = evalConstIntExpr(bin->right);
 
         if (!left.has_value() || !right.has_value()) {
             return std::nullopt;
         }
 
-        switch (bin->op) {
+        switch (bin->op) {      //  И применяем к ним операцию
             case Operand::Add:
                 return *left + *right;
 
@@ -763,6 +763,16 @@ std::optional<long long> SemanticAnalyzer::evalConstIntExpr(Expr* expr) {
                     return std::nullopt;
                 }
                 return *left % *right;
+            case Operand::Pow: {
+                if (*right < 0) {
+                    return std::nullopt;
+                }
+                long long result = 1;
+                for (long long i = 0; i < *right; i++) {
+                    result *= *left;
+                }
+                return result;
+            }
 
             default:
                 return std::nullopt;
@@ -823,6 +833,7 @@ std::shared_ptr<Type> SemanticAnalyzer::resolveTypeName(TypeName* typeName) {
 
     const std::string& name = typeName->base;
 
+    //  Примитивные типы
     if (name == "int" || name == "int32")       baseType = makeType(TypeKind::Int32);
     else if (name == "int8")                    baseType = makeType(TypeKind::Int8);
     else if (name == "int16")                   baseType = makeType(TypeKind::Int16);
@@ -838,7 +849,7 @@ std::shared_ptr<Type> SemanticAnalyzer::resolveTypeName(TypeName* typeName) {
     else if (name == "string")                  baseType = makeType(TypeKind::String);
     else if (name == "void")                    baseType = makeType(TypeKind::Void);
     else {
-        auto sym = resolveQualifiedSymbol(name);
+        auto sym = resolveQualifiedSymbol(name);    //  Составные типы ищем в таблице  
         if (!sym) {
             return nullptr;
         }
@@ -866,7 +877,9 @@ std::shared_ptr<Type> SemanticAnalyzer::resolveTypeName(TypeName* typeName) {
     std::shared_ptr<Type> result = baseType;
 
     for (const auto& suffix : typeName->suffixes) {
-        result = resolveArrayTypeSuffix(result, suffix, suffix.size ? suffix.size->line : 0, suffix.size ? suffix.size->column : 0);
+        int line = suffix.size ? suffix.size->line : 0;
+        int column = suffix.size ? suffix.size->column : 0;
+        result = resolveArrayTypeSuffix(result, suffix, line, column);
         if (!result) {
             return nullptr;
         }
@@ -955,14 +968,14 @@ static std::string appendQualifiedName(const std::string& prefix, const std::str
 }
 
 std::shared_ptr<Symbol> SemanticAnalyzer::resolveQualifiedSymbol(const std::string& nameSpace, const std::string& member) {
-    auto parts = splitQualifiedName(nameSpace);
+    auto parts = splitQualifiedName(nameSpace); //  Делим имя из области видимости на части по ::
     parts.push_back(member);
 
     if (parts.empty()) {
         return nullptr;
     }
 
-    std::shared_ptr<Symbol> currentSym = table.resolve(parts[0]);
+    std::shared_ptr<Symbol> currentSym = table.resolve(parts[0]);   //  Разбираем путь вложенности namespace начиная с базы
     std::shared_ptr<Scope> currentScope = nullptr;
 
     if (!currentSym) {
@@ -976,18 +989,19 @@ std::shared_ptr<Symbol> SemanticAnalyzer::resolveQualifiedSymbol(const std::stri
                 return nullptr;
             }
 
-            currentScope = currentSym->namespaceScope;
+            currentScope = currentSym->namespaceScope;  //  Уменьшаем область поиска
 
             auto it = currentScope->symbols.find(parts[i]);
             if (it == currentScope->symbols.end()) {
                 return nullptr;
             }
 
-            currentSym = it->second;
+            currentSym = it->second;    //  Сохраняем только вложенные неосмотренные элементы
             continue;
         }
 
         // Class::NestedStruct
+        // Здесь рассматриваем только случай с вложенными структурами класса, но не экземпляром класса
         if (currentSym->kind == SymbolKind::Class) {
             if (!currentSym->classInfo) {
                 return nullptr;
@@ -1036,15 +1050,9 @@ static bool isMarshalableToC(const std::shared_ptr<Type>& from, const std::share
     return false;
 }
 
-//  Унифицирует проверку вызова функции/метода по объявленной сигнатуре.
-//  Согласно спецификации: количество аргументов должно совпадать (для variadic — не меньше
-//  числа фиксированных), а каждый аргумент должен быть widening-конвертируем в тип параметра
-//  через isImplicitlyConvertible.  Для extern-C-функций дополнительно применяются правила
-//  маршалинга (string/array/ptr -> uint64).  Параметр what — описание для ошибок.
-void SemanticAnalyzer::checkCallArguments(const std::string& what, const std::vector<ParamInfo>& params,
-    const std::vector<std::shared_ptr<Type>>& argTypes, bool variadic, int line, int column, bool isExternC) {
+void SemanticAnalyzer::checkCallArguments(const std::string& what, const std::vector<ParamInfo>& params, const std::vector<std::shared_ptr<Type>>& argTypes, bool variadic, int line, int column, bool isExternC) {
     size_t fixed = params.size();
-    bool arityOk;
+    bool arityOk;   //  Не превышает ли кол-во параметров кол-во аргументов
     if (variadic) {
         arityOk = argTypes.size() >= fixed;
     }
@@ -1150,15 +1158,6 @@ std::shared_ptr<Symbol> SemanticAnalyzer::resolveQualifiedSymbol(const std::stri
     return resolveQualifiedSymbol(qualifiedName.substr(0, sep), qualifiedName.substr(sep + 2));
 }
 
-std::shared_ptr<Symbol> SemanticAnalyzer::resolveNamespaceAccess(NamespaceAccess* access) {
-    if (!access) {
-        return nullptr;
-    }
-
-    return resolveQualifiedSymbol(access->nameSpace, access->member);
-}
-
-
 // Обход AST
 
 //  Спускается по lvalue-выражению (Identifier / FieldAccess / ArrayAccess / NamespaceAccess)
@@ -1175,16 +1174,12 @@ std::shared_ptr<Symbol> SemanticAnalyzer::resolveTargetRoot(Expr* e) {
         return resolveTargetRoot(aa->object);
     }
     if (auto* na = dynamic_cast<NamespaceAccess*>(e)) {
-        return resolveNamespaceAccess(na);
+        return resolveQualifiedSymbol(na->nameSpace, na->member);
     }
     return nullptr;
 }
 
-//  Является ли выражение корректным lvalue: тем, у чего есть устойчивое
-//  место в памяти, в которое можно записать или над которым выполнить ++/--.
-//  Lvalue: переменная (Identifier→Variable), поле lvalue-объекта, элемент
-//  lvalue-массива, namespace-доступ к переменной. Всё остальное (литералы,
-//  бинарные/унарные выражения, вызовы функций, cast) — rvalue.
+//  Является ли выражение корректным lvalue
 bool SemanticAnalyzer::isLvalue(Expr* e) {
     if (!e) return false;
     if (auto* id = dynamic_cast<Identifier*>(e)) {
@@ -1204,7 +1199,7 @@ bool SemanticAnalyzer::isLvalue(Expr* e) {
         return isLvalue(aa->object);
     }
     if (auto* na = dynamic_cast<NamespaceAccess*>(e)) {
-        auto sym = resolveNamespaceAccess(na);
+        auto sym = resolveQualifiedSymbol(na->nameSpace, na->member);
         return sym && sym->kind == SymbolKind::Variable;
     }
     return false;
@@ -1245,21 +1240,21 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
     if (auto* num = dynamic_cast<Number*>(expr)) {
         if (num->isFloat) {
             if (expected && isFloatType(expected)) {
-                expr->resolvedType = expected;
+                expr->resolvedType = expected;      //  Если присутствует контекст типа берём его
             }
             else {
-                expr->resolvedType = makeType(TypeKind::Float64);
+                expr->resolvedType = makeType(TypeKind::Float64);   //  Иначе ставим тип по умолчанию
             }
         } 
         else {
             if (expected && isIntType(expected)) {
-                if (!integerLiteralFitsType(num->value, expected)) {
+                if (!integerLiteralFitsType(num->value, expected)) {    //  Слишком большое число для типа
                     error(expr->line, expr->column, "integer literal '" + std::to_string(static_cast<long long>(num->value)) + "' does not fit into type '" + typeToString(expected) + "'");
                 }
 
                 expr->resolvedType = expected;
             }
-            else if (expected && isFloatType(expected)) {
+            else if (expected && isFloatType(expected)) {   //  в случае float x = 5; 5 будет храниться как 5.0
                 expr->resolvedType = expected;
             }
             else {
@@ -1314,7 +1309,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             //  поэтому сначала проверяем текущий класс.
             if (currentClass) {
                 for (auto& f : currentClass->fields) {
-                    if (f.name == id->name) {
+                    if (f.name == id->name) {   //  Нашли наше неявное поле
                         id->resolvedField = &f;
                         expr->resolvedType = f.type;
                         return expr->resolvedType;
@@ -1360,8 +1355,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
                     return expr->resolvedType;
                 }
                 //  string + char  /  char + string -> string (символ склеивается как 1-байтовая строка)
-                if ((leftType->kind == TypeKind::String && rightType->kind == TypeKind::Char)
-                 || (leftType->kind == TypeKind::Char && rightType->kind == TypeKind::String)) {
+                if ((leftType->kind == TypeKind::String && rightType->kind == TypeKind::Char) || (leftType->kind == TypeKind::Char && rightType->kind == TypeKind::String)) {
                     expr->resolvedType = makeType(TypeKind::String);
                     return expr->resolvedType;
                 }
@@ -1371,7 +1365,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             case Operand::Mul:
             case Operand::Div:
             case Operand::Mod:
-            case Operand::Pow:
+            case Operand::Pow: {
                 if (!isNumericType(leftType) || !isNumericType(rightType)) {
                     error(expr->line, expr->column, "arithmetic operator requires numeric operands, got '" + typeToString(leftType) + "' and '" + typeToString(rightType) + "'");
                     return nullptr;
@@ -1382,22 +1376,21 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
                         return nullptr;
                     }
                 }
-                {
-                    auto common = commonType(leftType, rightType);  //  Неявное приведение: int32 + int64 -> int64, int + float -> float64
-                    if (!common) {
-                        error(expr->line, expr->column, "incompatible types in arithmetic: '" + typeToString(leftType) + "' and '" + typeToString(rightType) + "'");
-                        return nullptr;
-                    }
-                    if (bin->op == Operand::Pow && isIntType(common)) {
-                        auto exponent = evalConstIntExpr(bin->right);
-
-                        if (exponent.has_value() && *exponent < 0) {
-                            common = makeType(TypeKind::Float64);
-                        }
-                    }
-                    expr->resolvedType = common;  
+                auto common = commonType(leftType, rightType);  //  Неявное приведение: int32 + int64 -> int64, int + float -> float64
+                if (!common) {
+                    error(expr->line, expr->column, "incompatible types in arithmetic: '" + typeToString(leftType) + "' and '" + typeToString(rightType) + "'");
+                    return nullptr;
                 }
+                if (bin->op == Operand::Pow && isIntType(common)) {
+                    auto exponent = evalConstIntExpr(bin->right);
+
+                    if (exponent.has_value() && *exponent < 0) {
+                        common = makeType(TypeKind::Float64);   //  Отрицательная степень становится дробью
+                    }
+                }
+                expr->resolvedType = common;  
                 return expr->resolvedType;
+            }
 
             case Operand::Less:     //  Сравнения
             case Operand::Greater:
@@ -1417,8 +1410,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             case Operand::EqualEqual:   //  Равенства
             case Operand::NotEqual:
                 if (isUnsupportedEqualityType(leftType) || isUnsupportedEqualityType(rightType)) {
-                    error(expr->line, expr->column, "operator '" + std::string(bin->op == Operand::EqualEqual ? "==" : "!=") +
-                        "' is not defined for '" + typeToString(leftType) + "' and '" + typeToString(rightType) + "'");
+                    error(expr->line, expr->column, "operator '" + std::string(bin->op == Operand::EqualEqual ? "==" : "!=") + "' is not defined for '" + typeToString(leftType) + "' and '" + typeToString(rightType) + "'");
                     return nullptr;
                 }
                 if (isNumericType(leftType) && isNumericType(rightType)) {
@@ -1467,7 +1459,6 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
                     return nullptr;
                 }
 
-                // --- СПЕЦИАЛЬНЫЙ СЛУЧАЙ: -<числовой литерал> ---
                 if (expected) {
                     if (auto* num = dynamic_cast<Number*>(unary->operand)) {
                         if (!num->isFloat) { // только для целых литералов
@@ -1505,7 +1496,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
                 return expr->resolvedType;
 
             case Operand::Increment:
-            case Operand::Decrement:
+            case Operand::Decrement: {
                 if (!isIntType(operandType)) {  //  Только целые числа
                     error(expr->line, expr->column, "++/-- requires integer operand, got '" + typeToString(operandType) + "'");
                     return nullptr;
@@ -1514,19 +1505,18 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
                     error(expr->line, expr->column, "++/-- requires an lvalue operand");
                     return nullptr;
                 }
-                {
-                    auto rootSym = resolveTargetRoot(unary->operand);
-                    if (rootSym && rootSym->isConst) {
-                        error(expr->line, expr->column, "cannot apply ++/-- to const '" + rootSym->name + "'");
-                    }
-                    if (auto* id = dynamic_cast<Identifier*>(unary->operand)) {
-                        if (id->resolvedField && id->resolvedField->isConst) {
-                            error(expr->line, expr->column, "cannot apply ++/-- to const field '" + id->name + "'");
-                        }
+                auto rootSym = resolveTargetRoot(unary->operand);
+                if (rootSym && rootSym->isConst) {
+                    error(expr->line, expr->column, "cannot apply ++/-- to const '" + rootSym->name + "'");
+                }
+                if (auto* id = dynamic_cast<Identifier*>(unary->operand)) {
+                    if (id->resolvedField && id->resolvedField->isConst) {
+                        error(expr->line, expr->column, "cannot apply ++/-- to const field '" + id->name + "'");
                     }
                 }
                 expr->resolvedType = operandType;
                 return expr->resolvedType;
+            }
 
             default:
                 return nullptr;
@@ -1568,6 +1558,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             call->resolvedMethod = methodInfo;
             fieldCallee->resolvedMethod = methodInfo;
             appendMissingDefaultArgs(call, methodInfo->params, methodInfo->isVariadic);
+
             std::vector<std::shared_ptr<Type>> argTypes;
             for (size_t i = 0; i < call->args.size(); i++) {
                 std::shared_ptr<Type> expectedArg = nullptr;
@@ -1589,15 +1580,15 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
         std::shared_ptr<Symbol> sym = nullptr;
         std::string calleeName;
 
-        if (auto* callee = dynamic_cast<Identifier*>(call->callee)) {
+        if (auto* callee = dynamic_cast<Identifier*>(call->callee)) {   //  Местный вызов
             calleeName = callee->name;
             sym = table.resolve(callee->name);
         }
-        else if (auto* nsCallee = dynamic_cast<NamespaceAccess*>(call->callee)) {
+        else if (auto* nsCallee = dynamic_cast<NamespaceAccess*>(call->callee)) {   //  Вызов из стороннего namespace
             calleeName = nsCallee->nameSpace + "::" + nsCallee->member;
-            sym = resolveNamespaceAccess(nsCallee);
+            sym = resolveQualifiedSymbol(nsCallee->nameSpace, nsCallee->member);
         }
-        else {
+        else {  //  Функции не существует
             analyzeExpr(call->callee);
 
             for (auto* arg : call->args) {
@@ -1609,15 +1600,12 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
         }
 
         // Неявный вызов метода текущего класса:
-        // class A { int f(){...} int g(){ return f(); } }
         if (!sym && currentClass) {
             auto methodIt = currentClass->methods.find(calleeName);
 
             if (methodIt != currentClass->methods.end()) {
                 auto& methodInfo = methodIt->second;
-
                 call->resolvedMethod = methodInfo;
-
                 appendMissingDefaultArgs(call, methodInfo->params, methodInfo->isVariadic);
 
                 std::vector<std::shared_ptr<Type>> argTypes;
@@ -1689,7 +1677,6 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
         //  push(elem, arr)
         //  Важно: второй аргумент анализируем первым,
         //  чтобы получить тип элемента массива и пробросить его как expected
-        //  в первый аргумент для контекстной типизации.
         if (calleeName == "push") {
             if (call->args.size() != 2) {
                 error(expr->line, expr->column, "'push' expects 2 arguments (element, array), got " + std::to_string(call->args.size()));
@@ -1861,6 +1848,32 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             return expr->resolvedType;
         }
 
+        //  exit(code)
+        if (calleeName == "exit") {
+            if (argTypes.size() != 1) {
+                error(expr->line, expr->column, "'exit' expects 1 argument (code), got " + std::to_string(argTypes.size()));
+            }
+            else if (argTypes[0] && !isImplicitlyConvertible(argTypes[0], makeType(TypeKind::Int32))) {
+                error(expr->line, expr->column, "'exit' argument 1: cannot convert '" + typeToString(argTypes[0]) + "' to 'int32'");
+            }
+
+            expr->resolvedType = makeType(TypeKind::Void);
+            return expr->resolvedType;
+        }
+
+        //  panic(msg)
+        if (calleeName == "panic") {
+            if (argTypes.size() != 1) {
+                error(expr->line, expr->column, "'panic' expects 1 argument (msg), got " + std::to_string(argTypes.size()));
+            }
+            else if (argTypes[0] && !isImplicitlyConvertible(argTypes[0], makeType(TypeKind::String))) {
+                error(expr->line, expr->column, "'panic' argument 1: cannot convert '" + typeToString(argTypes[0]) + "' to 'string'");
+            }
+
+            expr->resolvedType = makeType(TypeKind::Void);
+            return expr->resolvedType;
+        }
+
         //  Проверяем обычные функции (для extern-C включается маршалинг string/array/ptr -> uint64)
         if (sym->funcInfo) {
             checkCallArguments("function '" + calleeName + "'", sym->funcInfo->params, argTypes, sym->funcInfo->isVariadic, expr->line, expr->column, sym->funcInfo->isExternC);
@@ -1886,7 +1899,6 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
             auto typeSym = table.resolve(id->name);
 
             if (typeSym && (typeSym->kind == SymbolKind::Struct || typeSym->kind == SymbolKind::Class)) {
-
                 FieldInfo* found = findFieldInTypeSymbol(typeSym, field->field);
 
                 if (!found) {
@@ -1903,12 +1915,10 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
 
         // Спец-форма: Namespace::TypeName.field
         if (auto* ns = dynamic_cast<NamespaceAccess*>(field->object)) {
-            auto typeSym = resolveNamespaceAccess(ns);
+            auto typeSym = resolveQualifiedSymbol(ns->nameSpace, ns->member);
             std::string fullTypeName = ns->nameSpace + "::" + ns->member;
 
-            if (typeSym &&
-                (typeSym->kind == SymbolKind::Struct || typeSym->kind == SymbolKind::Class)) {
-
+            if (typeSym && (typeSym->kind == SymbolKind::Struct || typeSym->kind == SymbolKind::Class)) {
                 FieldInfo* found = findFieldInTypeSymbol(typeSym, field->field);
 
                 if (!found) {
@@ -1927,7 +1937,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
 
         if (objType->kind == TypeKind::Struct) {    //  Если структура
             auto structSym = resolveQualifiedSymbol(objType->name);  //  Ищем в таблице
-            if (structSym && structSym->structInfo) {   //  Проходимся по вектору пар: имя -> тип поля
+            if (structSym && structSym->structInfo) { 
                 for (auto& f : structSym->structInfo->fields) {
                     if (f.name == field->field) {    //  Нашли поле
                         field->resolvedField = &f;
@@ -1936,7 +1946,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
                     }
                 }
                 error(expr->line, expr->column, "struct '" + objType->name + "' has no field '" + field->field + "'");
-            }   //  Не нашли поле
+            }   
             return nullptr;
         }
 
@@ -2081,6 +2091,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
     //  Литерал структуры Point { x: 5, y: 10 } 
     if (auto* structLit = dynamic_cast<StructLiteral*>(expr)) {
         auto sym = resolveQualifiedSymbol(structLit->name);
+
         if (!sym || sym->kind != SymbolKind::Struct) {
             error(expr->line, expr->column, "'" + structLit->name + "' is not a struct type");
             return nullptr;
@@ -2098,7 +2109,10 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
 
                 const FieldInfo* foundField = nullptr;
                 for (auto& f : sym->structInfo->fields) {
-                    if (f.name == init.name) { foundField = &f; break; }
+                    if (f.name == init.name) { 
+                        foundField = &f; 
+                        break; 
+                    }
                 }
 
                 //  Инициализация несуществующего поля: Point{unknownField: ...}.
@@ -2144,7 +2158,7 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
 
     //  Доступ через namespace std::expected
     if (auto* namespase = dynamic_cast<NamespaceAccess*>(expr)) {
-        auto sym = resolveNamespaceAccess(namespase);
+        auto sym = resolveQualifiedSymbol(namespase->nameSpace, namespase->member);
 
         std::string fullName = namespase->nameSpace + "::" + namespase->member;
 
@@ -2177,6 +2191,16 @@ static bool alwaysReturns(Stmt* stmt) {
     // return ...;
     if (dynamic_cast<Return*>(stmt)) {
         return true;
+    }
+
+    // exit(...) и panic(...) не возвращают управление, поэтому для проверки
+    // non-void функций они эквивалентны завершающей инструкции.
+    if (auto* exprStmt = dynamic_cast<ExprStmt*>(stmt)) {
+        if (auto* call = dynamic_cast<FuncCall*>(exprStmt->expr)) {
+            if (call->resolvedCallee && (call->resolvedCallee->name == "exit" || call->resolvedCallee->name == "panic")) {
+                return true;
+            }
+        }
     }
 
     // { stmt1; stmt2; ... }
@@ -2397,8 +2421,7 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
             sym->funcInfo = std::make_shared<FuncInfo>();   //  Заполняем информацию о сигнатуре
             sym->funcInfo->returnType = sym->type;
             for (auto& param : func->params) {
-                auto paramType = resolveDeclaredType(param.isAuto, param.isConst, param.typeName, param.defaultValue,
-                    decl->line, decl->column, "parameter '" + param.name + "' of function '" + func->name + "'", DeclContext::Parameter);
+                auto paramType = resolveDeclaredType(param.isAuto, param.isConst, param.typeName, param.defaultValue, decl->line, decl->column, "parameter '" + param.name + "' of function '" + func->name + "'", DeclContext::Parameter);
                 sym->funcInfo->params.push_back(makeParamInfo(param, paramType));
             }
             func->resolvedSym = sym;
@@ -2420,8 +2443,7 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
             sym->structInfo->name = qualifiedName;
             checkDuplicateFields(structDecl->fields, decl->line, decl->column, "struct '" + structDecl->name + "'");
             for (auto& field : structDecl->fields) {
-                auto fieldType = resolveDeclaredType(field.isAuto, field.isConst, field.typeName, field.defaultValue,
-                    decl->line, decl->column, "field '" + field.name + "' of struct '" + structDecl->name + "'", DeclContext::Field);
+                auto fieldType = resolveDeclaredType(field.isAuto, field.isConst, field.typeName, field.defaultValue, decl->line, decl->column, "field '" + field.name + "' of struct '" + structDecl->name + "'", DeclContext::Field);
                 field.resolvedType = fieldType;
                 sym->structInfo->fields.push_back({field.name, fieldType, field.isConst, field.defaultValue});
             }
@@ -2485,8 +2507,7 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
             checkDuplicateNestedStructs(clas->structs, decl->line, decl->column, clas->name);
 
             for (auto& field : clas->fields) {  //  Поля класса
-                auto fieldType = resolveDeclaredType(field.isAuto, field.isConst, field.typeName, field.defaultValue,
-                    decl->line, decl->column, "field '" + field.name + "' of class '" + clas->name + "'", DeclContext::Field);
+                auto fieldType = resolveDeclaredType(field.isAuto, field.isConst, field.typeName, field.defaultValue, decl->line, decl->column, "field '" + field.name + "' of class '" + clas->name + "'", DeclContext::Field);
                 field.resolvedType = fieldType;
                 sym->classInfo->fields.push_back({field.name, fieldType, field.isConst, field.defaultValue});
             }
@@ -2499,9 +2520,7 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
                 nestedInfo->name = qualifiedName + "::" + nested->name;
                 checkDuplicateFields(nested->fields, nested->line, nested->column, "nested struct '" + qualifiedName + "::" + nested->name + "'");
                 for (auto& field : nested->fields) {
-                    auto fieldType = resolveDeclaredType(field.isAuto, field.isConst, field.typeName, field.defaultValue,
-                        decl->line, decl->column,
-                        "field '" + field.name + "' of nested struct '" + nestedInfo->name + "'", DeclContext::Field);
+                    auto fieldType = resolveDeclaredType(field.isAuto, field.isConst, field.typeName, field.defaultValue, decl->line, decl->column, "field '" + field.name + "' of nested struct '" + nestedInfo->name + "'", DeclContext::Field);
                     field.resolvedType = fieldType;
                     nestedInfo->fields.push_back({field.name, fieldType, field.isConst, field.defaultValue});
                 }
@@ -2522,9 +2541,7 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
                 methodInfo->returnType = returnType;
                 checkDuplicateParams(method->params, method->line, method->column, "method '" + clas->name + "." + method->name + "'");
                 for (auto& param : method->params) {
-                    auto paramType = resolveDeclaredType(param.isAuto, param.isConst, param.typeName, param.defaultValue,
-                        decl->line, decl->column,
-                        "parameter '" + param.name + "' of method '" + clas->name + "." + method->name + "'", DeclContext::Parameter);
+                    auto paramType = resolveDeclaredType(param.isAuto, param.isConst, param.typeName, param.defaultValue, decl->line, decl->column, "parameter '" + param.name + "' of method '" + clas->name + "." + method->name + "'", DeclContext::Parameter);
                     methodInfo->params.push_back(makeParamInfo(param, paramType));
                 }
                 method->resolvedInfo = methodInfo;
@@ -2536,9 +2553,7 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
                 classInfo->returnType = makeType(TypeKind::Void);
                 checkDuplicateParams( clas->constructor->params, clas->constructor->line, clas->constructor->column, "constructor of class '" + clas->name + "'");
                 for (auto& param : clas->constructor->params) { //  Параметры конструктора
-                    auto paramType = resolveDeclaredType(param.isAuto, param.isConst, param.typeName, param.defaultValue,
-                        decl->line, decl->column,
-                        "parameter '" + param.name + "' of constructor of '" + clas->name + "'", DeclContext::Parameter);
+                    auto paramType = resolveDeclaredType(param.isAuto, param.isConst, param.typeName, param.defaultValue, decl->line, decl->column, "parameter '" + param.name + "' of constructor of '" + clas->name + "'", DeclContext::Parameter);
                     classInfo->params.push_back(makeParamInfo(param, paramType));
                 }
                 clas->constructor->resolvedInfo = classInfo;
@@ -2661,7 +2676,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             if (!declaredType) {
                 error(stmt->line, stmt->column, "unknown type '" + typeNameToString(var->typeName) + "'");
             }
-            else if (declaredType->kind == TypeKind::Void) {
+            else if (declaredType->kind == TypeKind::Void) {    //  Переменная не может быть типом void
                 error(stmt->line, stmt->column, "cannot declare variable with type 'void'");
             }
             //  DynArray без инициализатора считается пустым массивом
@@ -2675,10 +2690,10 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             bool alreadyDeclared = false;
 
             if (sym && sym->kind == SymbolKind::Variable) {
-                alreadyDeclared = true;
+                alreadyDeclared = true;     //  Если уже была инициализация, то просто меняем значения у имеющейся записи
             }
             else {
-                sym = std::make_shared<Symbol>();
+                sym = std::make_shared<Symbol>();   // Если не было - создаём экземпляр, потом запишем в таблицу
                 sym->name = v->name;
                 sym->kind = SymbolKind::Variable;
             }
@@ -2686,19 +2701,19 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             sym->isConst = var->isConst;
             sym->isInitialized = (v->init != nullptr);
             
-            if (!sym->isInitialized && isDynArrayDecl)
+            if (!sym->isInitialized && isDynArrayDecl)  
                 sym->isInitialized = true;
 
             if (var->isAuto) {  //  auto — выводим тип из инициализатора
                 std::shared_ptr<Type> initType = analyzeExpr(v->init);
-                if (!initType) {
+                if (!initType) {    //  Для auto обязан инициализатор
                     error(stmt->line, stmt->column, "'auto' requires initializer to infer type for '" + v->name + "'");
                 }
                 sym->type = initType;
                 sym->intConstValue = std::nullopt;
 
                 if (var->isConst && v->init && sym->type && isIntType(sym->type)) {
-                    auto value = evalConstIntExpr(v->init);
+                    auto value = evalConstIntExpr(v->init); //  Константное целое выражение схлопываем сразу же до значения
 
                     if (value.has_value()) {
                         sym->intConstValue = *value;
@@ -2708,22 +2723,21 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             else {
                 sym->type = declaredType;
 
-                if (!v->init && var->isConst) {
-                    //  Константа без явного инициализатора запрещена.
+                if (!v->init && var->isConst) {  //  Константа без явного инициализатора запрещена.
                     error(stmt->line, stmt->column, "const variable '" + v->name + "' requires an explicit initializer");
                 }
                 else if (!v->init && declaredType && declaredType->kind != TypeKind::Void) {
                     v->init = makeDefaultExprForType(declaredType, stmt->line, stmt->column);
-                    sym->isInitialized = true;
+                    sym->isInitialized = true;  //  default значение для каждой неинициализированной переменной
                 }
 
                 std::shared_ptr<Type> initType = nullptr;
                 if (v->init) {
-                    initType = analyzeExpr(v->init, sym->type);
+                    initType = analyzeExpr(v->init, sym->type); //  Определяем значение переменной
                 }
 
                 if (initType && sym->type) {
-                    if (!isImplicitlyConvertible(initType, sym->type)) {
+                    if (!isImplicitlyConvertible(initType, sym->type)) {    //  Можно ли в int записать строку?
                         error(stmt->line, stmt->column, "cannot initialize '" + v->name + "' of type '" + typeToString(sym->type) + "' with '" + typeToString(initType) + "'");
                     }
                 }
@@ -2740,7 +2754,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             }
 
             if (!alreadyDeclared) {
-                auto result = table.declare(sym);
+                auto result = table.declare(sym);   //  Записываем наш экземпляр в таблицу
                 if (!result) {
                     error(stmt->line, stmt->column, result.error());
                 }
@@ -2748,31 +2762,29 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             v->resolvedSym = sym; 
         }
     }
+    
     else if (auto* block = dynamic_cast<Block*>(stmt)) {    //  Если это блок то соответственно анализируем блок
         analyzeBlock(block);
     }
+
     else if (auto* assign = dynamic_cast<Assign*>(stmt)) {  //  Присваивание, проверяем типы, const, инициализацию
-        //  Спец-форма: переопределение default-значения поля типа `TypeName.field = value`.
-        //  Применимо к struct и class. Обрабатываем отдельно, чтобы обычная ветка анализа
-        //  Identifier не ругалась на использование имени типа как значения.
-        if (auto* fa = dynamic_cast<FieldAccess*>(assign->target)) {
+        if (auto* fa = dynamic_cast<FieldAccess*>(assign->target)) {    //  Присваиваем полю самой структуры, не экземпляру
             std::shared_ptr<Symbol> typeSym = nullptr;
             std::string typeNameForError;
 
-            if (auto* id = dynamic_cast<Identifier*>(fa->object)) {
+            if (auto* id = dynamic_cast<Identifier*>(fa->object)) {     //  Берём значение либо сразу из таблицы
                 typeSym = table.resolve(id->name);
                 typeNameForError = id->name;
             }
-            else if (auto* ns = dynamic_cast<NamespaceAccess*>(fa->object)) {
-                typeSym = resolveNamespaceAccess(ns);
+            else if (auto* ns = dynamic_cast<NamespaceAccess*>(fa->object)) {   //  Либо из пространства имён
+                typeSym = resolveQualifiedSymbol(ns->nameSpace, ns->member);
                 typeNameForError = ns->nameSpace + "::" + ns->member;
             }
 
-            bool isType = typeSym &&
-                (typeSym->kind == SymbolKind::Struct || typeSym->kind == SymbolKind::Class);
+            bool isType = typeSym && (typeSym->kind == SymbolKind::Struct || typeSym->kind == SymbolKind::Class);
 
-            if (isType) {
-                FieldInfo* field = findFieldInTypeSymbol(typeSym, fa->field);
+            if (isType) {   //  Если наш тип структура или класс
+                FieldInfo* field = findFieldInTypeSymbol(typeSym, fa->field);   //  Ищем все их поля
 
                 if (!field) {
                     const char* what = typeSym->kind == SymbolKind::Struct ? "struct" : "class";
@@ -2785,9 +2797,9 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                     return;
                 }
 
-                auto valueType = analyzeExpr(assign->value, field->type);
+                auto valueType = analyzeExpr(assign->value, field->type);   //  Смотрим значение для присваивания
 
-                if (valueType && !isImplicitlyConvertible(valueType, field->type)) {
+                if (valueType && !isImplicitlyConvertible(valueType, field->type)) {    //  Можем ли перезаписать
                     error(stmt->line, stmt->column, "cannot redefine default of '" + typeNameForError + "." + fa->field + "': expected '" + typeToString(field->type) + "', got '" + typeToString(valueType) + "'");
                     return;
                 }
@@ -2807,8 +2819,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             error(stmt->line, stmt->column, "left-hand side of assignment is not an lvalue");
         }
 
-        //  Проверка const на корневой символ цели: покрывает Identifier,
-        //  FieldAccess (obj.field, obj.a.b), ArrayAccess (arr[i], m[i][j]) и NamespaceAccess
+        //  Проверка const на корневой символ цели
         auto rootSym = resolveTargetRoot(assign->target);
         if (rootSym && rootSym->isConst) {
             error(stmt->line, stmt->column, "cannot assign to const '" + rootSym->name + "'");
@@ -2821,15 +2832,19 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             }
         }
 
-        //  Проверка const самого поля при obj.x = ... (включая цепочки obj.a.b = ...)
+        //  Присваивание полю экземпляра класса или структуры
         if (auto* fa = dynamic_cast<FieldAccess*>(assign->target)) {
             auto objType = fa->object->resolvedType;
             if (objType && (objType->kind == TypeKind::Struct || objType->kind == TypeKind::Class)) {
                 auto typeSym = resolveQualifiedSymbol(objType->name);
                 const std::vector<FieldInfo>* fields = nullptr;
                 if (typeSym) {
-                    if (typeSym->structInfo) fields = &typeSym->structInfo->fields;
-                    else if (typeSym->classInfo) fields = &typeSym->classInfo->fields;
+                    if (typeSym->structInfo) {
+                        fields = &typeSym->structInfo->fields;
+                    }
+                    else if (typeSym->classInfo) {
+                        fields = &typeSym->classInfo->fields;
+                    }
                 }
                 if (fields) {
                     for (auto& f : *fields) {
@@ -2893,6 +2908,8 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             }
         }
     }
+
+
     else if (auto* ifStmt = dynamic_cast<If*>(stmt)) {  //  if
         auto condType = analyzeExpr(ifStmt->condition);
         if (condType && condType->kind != TypeKind::Bool) {   //  Условие всегда типа bool
@@ -2959,7 +2976,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         table.enterScope();     //  Тело функции — новый scope, в который добавляем параметры с типами
         if (sym && sym->funcInfo) {
             for (size_t j = 0; j < func->params.size(); j++) {  //  Регистрируем параметры
-                auto paramSym = std::make_shared<Symbol>();
+                auto paramSym = std::make_shared<Symbol>(); //  Проверка на дубликаты параметров уже была в collectTopLevel, здесь уже лишняя
                 paramSym->name = func->params[j].name;
                 paramSym->kind = SymbolKind::Variable;
                 paramSym->isInitialized = true;  //  параметры всегда инициализированы
@@ -2997,10 +3014,10 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         currentReturnType = prevReturnType;
     }
     else if (dynamic_cast<StructDecl*>(stmt)) {
-        //  Уже зарегистрирован в collectTopLevel — пропускаем
+        //  Уже зарегистрирован в collectTopLevel, у структуры нет вложенных stmt следовательно тут анализировать нечего - пропускаем
     }
     else if (dynamic_cast<TypeAlias*>(stmt)) {
-        //  Уже зарегистрирован в collectTopLevel — пропускаем
+        //  Уже зарегистрирован в collectTopLevel, здесь тоже нечего анализировать — пропускаем
     }
     else if (auto* clas = dynamic_cast<ClassDecl*>(stmt)) {  //  Объявление класса
         auto classSym = table.resolve(clas->name);
@@ -3017,7 +3034,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         for (auto* method : clas->methods) {    //  Анализируем тела методов
             auto prevRetType = currentReturnType;
             auto currMethod = classSym->classInfo->methods.find(method->name);
-            if (currMethod != classSym->classInfo->methods.end())
+            if (currMethod != classSym->classInfo->methods.end()) 
                 currentReturnType = currMethod->second->returnType;
             else
                 currentReturnType = nullptr;

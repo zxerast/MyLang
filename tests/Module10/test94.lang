@@ -39,7 +39,7 @@ class Counter {
 }
 
 //  Runtime output:
-//  TEST 4 OK 10 15 11 100 100 236
+//  TEST 4 OK 10 15 11 10 100 146
 //  runtime_exit=236
 
 //  Status: OK

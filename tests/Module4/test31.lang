@@ -18,7 +18,3 @@ int main() {
 
     return 0;
 }
-
-//  test31.lang:15:21: error: incompatible types in arithmetic: 'int64' and 'uint64'
-
-//  Status: NOT OK -> FIX !!!

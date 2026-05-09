@@ -11,7 +11,7 @@ int main(int argc, char* argv[]){
     std::string sourcePath;
     std::string outputPath;
     bool dumpTokens = false;
-    // bool dumpAst = false;
+    bool dumpAst = false;
 
     for (int i = 1; i < argc; i++){
         std::string arg = argv[i];
@@ -25,9 +25,9 @@ int main(int argc, char* argv[]){
         else if (arg == "--dump-tokens"){
             dumpTokens = true;
         }
-        /*else if (arg == "--dump-ast"){
+        else if (arg == "--dump-ast"){
             dumpAst = true;
-        }*/
+        }
         else if (arg == "-h" || arg == "--help"){
             std::cout << "Usage: myc <source> [-o <output>] [--dump-tokens] [--dump-ast]\n";
             return 0;
@@ -100,8 +100,13 @@ int main(int argc, char* argv[]){
                 name = c->name; 
             }
             else if (auto* v = dynamic_cast<VarDecl*>(decl)) { 
-                kind = "VarDecl";       
-                name = v->name; 
+                kind = "VarDecl";
+                for (size_t j = 0; j < v->vars.size(); j++) {
+                    if (j > 0) {
+                        name += ", ";
+                    }
+                    name += v->vars[j]->name;
+                }
             }
             else if (auto* t = dynamic_cast<TypeAlias*>(decl)) {
                 kind = "TypeAlias";     

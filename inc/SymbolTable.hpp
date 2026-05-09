@@ -14,7 +14,6 @@ struct Scope;     //  forward declaration для namespace_scope в Symbol
 struct FuncInfo;  //  forward declaration для ClassInfo
 struct TypeName;  //  forward declaration для resolveTypeName
 struct TypeSuffix;       //  forward declaration для resolveArrayTypeSuffix
-struct NamespaceAccess;  //  forward declaration для resolveNamespaceAccess
 struct Expr;             //  forward declaration для default-значений полей/параметров
 
 enum class SymbolKind { //  Что есть наш символ
@@ -222,8 +221,6 @@ class SemanticAnalyzer {
     std::shared_ptr<Symbol> resolveQualifiedSymbol(const std::string& nameSpace, const std::string& member);
     std::shared_ptr<Symbol> resolveQualifiedSymbol(const std::string& qualifiedName);
 
-    std::shared_ptr<Symbol> resolveNamespaceAccess(NamespaceAccess* access);
-
     void checkDuplicateParams(const std::vector<Param>& params, int line, int column, const std::string& where);
     void checkDuplicateFields(const std::vector<StructField>& fields, int line, int column, const std::string& where);
     void checkDuplicateMethods(const std::vector<FuncDecl*>& methods, int line, int column, const std::string& className);
@@ -235,9 +232,7 @@ class SemanticAnalyzer {
 
     //  Унифицированная проверка аргументов вызова (функция/метод) по сигнатуре:
     //  арность (с учётом variadic) и widening через isImplicitlyConvertible.
-    void checkCallArguments(const std::string& what, const std::vector<ParamInfo>& params,
-        const std::vector<std::shared_ptr<Type>>& argTypes, bool variadic, int line, int column,
-        bool isExternC = false);
+    void checkCallArguments(const std::string& what, const std::vector<ParamInfo>& params, const std::vector<std::shared_ptr<Type>>& argTypes, bool variadic, int line, int column, bool isExternC = false);
     void appendMissingDefaultArgs(FuncCall* call, const std::vector<ParamInfo>& params, bool variadic);
     Expr* makeDefaultExprForType(const std::shared_ptr<Type>& type, int line, int column);
 

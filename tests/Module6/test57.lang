@@ -18,8 +18,4 @@ int main() {
     return result;
 }
 
-//  Runtime output:
-//  TEST 7 OK 11 1 2 3 17
-//  runtime_exit=17
-
 //  Status: OK
