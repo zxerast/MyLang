@@ -603,7 +603,7 @@ static std::string shellQuote(const std::string& value) {
     return result;
 }
 
-static std::string codegenQualifiedName(const std::string& prefix, const std::string& name) {
+static std::string appendQualifiedName(const std::string& prefix, const std::string& name) {
     if (prefix.empty()) {
         return name;
     }
@@ -1519,86 +1519,82 @@ void CodeGen::compileExprAs(Expr* expr, const std::shared_ptr<Type>& targetType)
     emitCastFromTo(fromType, targetType);
 }
 
-//  Регистрирует смещение полей struct/class: скаляры/указатели — qword, DynArray (T[]) — 3 qword'а (ptr/len/cap)
+//  Регистрирует смещение полей struct/class
 void CodeGen::collectLayout(const std::string& name, const std::vector<StructField>& fields) {
-    auto& layout = structLayouts[name];     //  смещение полей структуры
-    auto& types = structFieldTypes[name];   //  типы полей структуры
-    auto& order = structFieldOrder[name];   //  порядок объявления полей структуры
+    std::unordered_map<std::string, int> layout;    //  временные буферы для смещения, типов и порядка
+    std::unordered_map<std::string, std::shared_ptr<Type>> types;
+    std::vector<std::string> order;
 
-    layout.clear(); //  Очистка данных прошлой структуры
-    types.clear();
-    order.clear();
+    int offset = 0; //  Начальное смещение памяти
 
-    int offset = 0; //  Текущее смещение внутри текущей структуры
-
-    for (auto& field : fields) {
-        std::shared_ptr<Type> fieldType = nullptr;
-
-        if (field.resolvedType) {   //  Берём тип из контекста
-            fieldType = field.resolvedType;
-        }
-        else if (field.defaultValue && field.defaultValue->resolvedType) {  //  Или из значения
-            fieldType = field.defaultValue->resolvedType;
-        }
-        
-
+    for (const auto& field : fields) {
+        auto fieldType = field.resolvedType;    //  Тип определённый семантикой
         if (!fieldType) {
             codegenError(0, 0, "field '" + name + "." + field.name + "' has no resolved type");
             continue;
         }
 
-        int align = sizeOfType(fieldType);  //  В зависимости от типа выравниваем его до 8
-        if (align <= 0) align = 1;
-        if (align > 8) align = 8;
-
-        int rem = offset % align;   //  Если не кратно 8 то добавляем до ближвейшего кратного
-        if (rem != 0) {
-            offset += align - rem;
+        int size = sizeOfType(fieldType);   //  Размер типа
+        if (size <= 0) {
+            codegenError(0, 0, "field '" + name + "." + field.name + "' has invalid size");
+            continue;
         }
 
-        layout[field.name] = offset;    //  Всё записываем
+        int align = std::min(size, 8);  
+        int rem = offset % align;   //  Выравнивание типа в зависимости от его размера, максимум можно выравнивать по 8
+        if (rem != 0) {
+            offset += align - rem;  //  Выравнивание следующего поля не соответствует предыдущему, добавляем смещение
+        }
+
+        layout[field.name] = offset;    
         types[field.name] = fieldType;
-        order.push_back(field.name);
+        order.push_back(field.name);    //  Порядок инициализации важен, поэтому pushback
 
-        int sz = sizeOfType(fieldType);
-        if (sz <= 0) sz = 8;
-
-        offset += sz;
+        offset += size;
     }
 
-    int rem = offset % 8;   //  Смотрим общее выравнивание всей структуры
+    int rem = offset % 8;   //  Финальный размер тоже должен быть выравнен, на случай массива структур
     if (rem != 0) {
         offset += 8 - rem;
     }
 
-    structSizes[name] = offset;
+    //  Собранные данные храним во вложенных словарях
+    structLayouts[name] = std::move(layout);    // имя структуры: {имя поля -> смещение}
+    structFieldTypes[name] = std::move(types);  // имя структуры: {имя поля -> тип поля}
+    structFieldOrder[name] = std::move(order);  // имя структуры -> вектор имён в порядке объявления
+    structSizes[name] = offset;     // имя структуры -> итоговый размер 
 }
+
 
 //  Обходит AST и регистрирует смещение для всех struct/class/namespace/export
 void CodeGen::collectDecls(Stmt* decl) {
     if (!decl) return;
+
     if (auto* structDecl = dynamic_cast<StructDecl*>(decl)) {
-        std::string qualifiedName = codegenQualifiedName(currentNamespace, structDecl->name);
-        collectLayout(qualifiedName, structDecl->fields);
-        if (!structDecls.count(qualifiedName)) {
+        std::string qualifiedName = appendQualifiedName(currentNamespace, structDecl->name);    //  Полное имя с namespace::
+        collectLayout(qualifiedName, structDecl->fields);   //  Собираем смещения полей
+
+        if (!structDecls.count(qualifiedName)) {    //  Регистрируем ещё ненайденную структуру чтобы повторно не записывать её данные о смещениях
             structDecls[qualifiedName] = structDecl;
             structDeclNames[structDecl] = qualifiedName;
             structDeclsOrdered.push_back(structDecl);
         }
     }
     else if (auto* classDecl = dynamic_cast<ClassDecl*>(decl)) {
-        std::string qualifiedName = codegenQualifiedName(currentNamespace, classDecl->name);
-        collectLayout(qualifiedName, classDecl->fields);
+        std::string qualifiedName = appendQualifiedName(currentNamespace, classDecl->name);
+        collectLayout(qualifiedName, classDecl->fields);    //  Тоже самое делаем с полями класса
+
         if (!classDecls.count(qualifiedName)) {
             classDecls[qualifiedName] = classDecl;
             classDeclNames[classDecl] = qualifiedName;
             classDeclsOrdered.push_back(classDecl);
         }
 
-        for (auto* nested : classDecl->structs) {
+        for (auto* nested : classDecl->structs) {   // И для вложенных структур класса
             if (!nested) continue;
-            std::string nestedName = qualifiedName + "::" + nested->name;
+            std::string nestedName = appendQualifiedName(qualifiedName, nested->name);
             collectLayout(nestedName, nested->fields);
+
             if (!structDecls.count(nestedName)) {
                 structDecls[nestedName] = nested;
                 structDeclNames[nested] = nestedName;
@@ -1606,13 +1602,15 @@ void CodeGen::collectDecls(Stmt* decl) {
             }
         }
     }
-    else if (auto* exp = dynamic_cast<ExportDecl*>(decl)) {
+    else if (auto* exp = dynamic_cast<ExportDecl*>(decl)) { //  Для export рекурсивно вызываем весь прогон 
         collectDecls(exp->decl);
     }
     else if (auto* ns  = dynamic_cast<NamespaceDecl*>(decl)) {
-        std::string prevNamespace = currentNamespace;
-        currentNamespace = codegenQualifiedName(currentNamespace, ns->name);
-        for (auto* stmt : ns->decls) collectDecls(stmt);
+        std::string prevNamespace = currentNamespace;   // Для namespace тоже рекурсия, но не забываем сохранять имя прошлой области
+        currentNamespace = appendQualifiedName(currentNamespace, ns->name);
+        for (auto* stmt : ns->decls) {
+            collectDecls(stmt);
+        }
         currentNamespace = prevNamespace;
     }
     else if (auto* var = dynamic_cast<VarDecl*>(decl)) {    //  Глобальная переменная: регистрируем имя и её тип
@@ -1740,7 +1738,7 @@ void CodeGen::compileDecl(Stmt* decl, const std::string& classPrefix) {
     }
 
     if (auto* classDecl  = dynamic_cast<ClassDecl*>(decl)) {    //  Компилируем методы класса с self в rdi
-        std::string qualifiedClassName = codegenQualifiedName(classPrefix, classDecl->name);
+        std::string qualifiedClassName = appendQualifiedName(classPrefix, classDecl->name);
         std::string mangledClassName = mangleQualifiedName(qualifiedClassName);
         std::string saveClassName = classDecl->name;
         classDecl->name = qualifiedClassName;
@@ -1776,20 +1774,6 @@ void CodeGen::compileDecl(Stmt* decl, const std::string& classPrefix) {
 
 //  Точка входа
 std::expected<void, std::string> CodeGen::generate(Program* program, const std::string& outPath) {
-    auto isTopLevelMain = [](Stmt* decl) -> bool {
-        if (auto* func = dynamic_cast<FuncDecl*>(decl)) {
-            return func->name == "main";
-        }
-
-        if (auto* exp = dynamic_cast<ExportDecl*>(decl)) {
-            if (auto* func = dynamic_cast<FuncDecl*>(exp->decl)) {
-                return func->name == "main";
-            }
-        }
-
-        return false;
-    };
-
     text << "extern print_int\n";       //  Импорты рантайма
     text << "extern print_string\n";
     text << "extern print_bool\n";
@@ -1819,10 +1803,10 @@ std::expected<void, std::string> CodeGen::generate(Program* program, const std::
     rodata << "__rt_negative_pow: db \"negative exponent\", 0\n";
 
     //  Первый проход — ставим смещение в struct/class
-    for (auto* decl : program->imports) {
+    for (auto* decl : program->imports) {   //  Сперва для модулей
         collectDecls(decl);
     }
-    for (auto* decl : program->decls) {
+    for (auto* decl : program->decls) { //  Потом для самой программы
         collectDecls(decl);
     }
 
@@ -1841,7 +1825,6 @@ std::expected<void, std::string> CodeGen::generate(Program* program, const std::
         std::string structName = structDeclNames.count(sd) ? structDeclNames[sd] : sd->name;
         for (auto& field : sd->fields) {
             int size = sizeOfType(field.resolvedType);
-            if (size <= 0) size = 8;
             bss << "__default_" << mangleQualifiedName(structName) << "_" << field.name << ": resb " << size << "\n";
         }
     }
@@ -1851,8 +1834,9 @@ std::expected<void, std::string> CodeGen::generate(Program* program, const std::
     for (auto* cd : classDeclsOrdered) {
         std::string className = classDeclNames.count(cd) ? classDeclNames[cd] : cd->name;
         int size = 0;
-        if (structSizes.count(className)) size = structSizes[className];
-        if (size <= 0) size = 8;
+        if (structSizes.count(className)) {
+            size = structSizes[className];
+        }
         bss << "__default_instance_" << mangleQualifiedName(className) << ": resb " << size << "\n";
     }
 
@@ -1873,7 +1857,18 @@ std::expected<void, std::string> CodeGen::generate(Program* program, const std::
     //  Компилируем каждую функцию верхнего уровня (включая методы классов)
     hasMain = false;
     for (auto* decl : program->imports) {
-        if (!isTopLevelMain(decl)) {
+        bool isImportMain = false;
+
+        if (auto* func = dynamic_cast<FuncDecl*>(decl)) {
+            isImportMain = func->name == "main";
+        }
+        else if (auto* exp = dynamic_cast<ExportDecl*>(decl)) {
+            if (auto* func = dynamic_cast<FuncDecl*>(exp->decl)) {
+                isImportMain = func->name == "main";
+            }
+        }
+
+        if (!isImportMain) {
             compileDecl(decl, "");
         }
     }
