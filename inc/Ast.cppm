@@ -1,43 +1,47 @@
-#pragma once
+module;
 
-#include "Tokens.hpp"
-#include "Type.hpp"
 #include <expected>
 #include <memory>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
-//  Forward declarations для семантических привязок (заполняются SemanticAnalyzer
-//  и используются кодгеном без повторного lookup'а).
-struct Symbol;
-struct FuncInfo;
-struct FieldInfo;
+export module ast;
 
-struct ASTNode{
+import types;
+
+export struct Symbol;
+export struct FuncInfo;
+export struct FieldInfo;
+
+export struct ASTNode{
     int line = 0;       // Номер строки в исходнике (из токена)
     int column = 0;     // Номер столбца (из токена)
     virtual ~ASTNode() = default;
 };
 
-struct Expr : ASTNode {     //  Возвращает значение
+export struct Expr : ASTNode {     //  Возвращает значение
     std::shared_ptr<Type> resolvedType;  //  Тип, определённый семантическим анализатором
 };
-struct Stmt : ASTNode {};   //  Выполнят действие
+export struct Stmt : ASTNode {};   //  Выполнят действие
 
 //  Выражения
 
-struct Number : Expr{
+export struct Number : Expr{
     double value;
     bool isFloat = false;  //  true если литерал содержит точку
 };
 
-struct String : Expr{
+export struct String : Expr{
     std::string value;
 };
 
-struct Bool : Expr{
+export struct Bool : Expr{
     bool value;
 };
 
-struct Identifier : Expr{
+export struct Identifier : Expr{
     std::string name;
     //  Семантическая привязка: либо разрешённый символ (переменная/параметр/функция/тип),
     //  либо поле текущего класса (неявное self.<name>). Заполняется SemanticAnalyzer.
@@ -45,7 +49,7 @@ struct Identifier : Expr{
     FieldInfo* resolvedField = nullptr;
 };
 
-enum class Operand{
+export enum class Operand{
     Add, Sub, Mul, Div, Mod,
     EqualEqual, NotEqual,
     Less, Greater, LessEqual, GreaterEqual,
@@ -54,18 +58,18 @@ enum class Operand{
     Increment, Decrement,
 };
 
-struct Binary : Expr{
+export struct Binary : Expr{
     Operand op;
     Expr *left;
     Expr *right;
 };
 
-struct Unary : Expr{
+export struct Unary : Expr{
     Operand op;
     Expr *operand;
 };
 
-struct FuncCall : Expr{
+export struct FuncCall : Expr{
     Expr *callee;
     std::vector<Expr*> args;
     bool isExternC = false;   //  Вызов C-функции (без префикса lang_)
@@ -76,7 +80,7 @@ struct FuncCall : Expr{
     std::shared_ptr<FuncInfo> resolvedMethod;
 };
 
-struct FieldAccess : Expr{
+export struct FieldAccess : Expr{
     Expr *object;
     std::string field;
     //  Семантическая привязка: либо поле struct/class, либо метод класса.
@@ -85,27 +89,27 @@ struct FieldAccess : Expr{
     bool isTypeDefaultFieldAccess = false;
 };
 
-struct ArrayAccess : Expr{
+export struct ArrayAccess : Expr{
     Expr *object;
     Expr *index;
 };
 
-struct ArrayLiteral : Expr{
+export struct ArrayLiteral : Expr{
     std::vector<Expr*> elements;
 };
 
-struct FieldInit{
+export struct FieldInit{
     std::string name;
     Expr *value;
 };
 
-struct StructLiteral : Expr{
+export struct StructLiteral : Expr{
     std::string name;
     std::vector<FieldInit> fields;
 };
 
 
-struct NamespaceAccess : Expr{
+export struct NamespaceAccess : Expr{
     std::string nameSpace;
     std::string member;
     //  Семантическая привязка: разрешённый символ из соответствующего namespace.
@@ -114,7 +118,7 @@ struct NamespaceAccess : Expr{
 
 //  Инструкции
 
-enum class AssignOp {
+export enum class AssignOp {
     Assign,
     AddAssign,
     SubAssign,
@@ -123,63 +127,63 @@ enum class AssignOp {
     ModAssign
 };
 
-struct Assign : Stmt{
+export struct Assign : Stmt{
     AssignOp op = AssignOp::Assign;
     Expr *target;
     Expr *value;
 };
 
-struct Block : Stmt{
+export struct Block : Stmt{
     std::vector<Stmt*> statements;
 };
 
-struct If : Stmt{
+export struct If : Stmt{
     Expr *condition;
     Stmt *thenBranch;
     Stmt *elseBranch;
 };
 
-struct While : Stmt{
+export struct While : Stmt{
     Expr *condition;
     Stmt *body;
 };
 
-struct Break : Stmt{};
+export struct Break : Stmt{};
 
-struct Continue : Stmt{};
+export struct Continue : Stmt{};
 
-struct Return : Stmt{
+export struct Return : Stmt{
     Expr *value;
 };
 
-struct ExprStmt : Stmt{
+export struct ExprStmt : Stmt{
     Expr *expr;
 };
 
-struct TypeSuffix {
+export struct TypeSuffix {
     bool isDynamic = false;   // true для []
     Expr* size = nullptr;     // nullptr для [], Expr* для [expr]
 };
 
-struct TypeName {
+export struct TypeName {
     std::string base;                 // int, Point, string, ...
     std::vector<TypeSuffix> suffixes; // [], [expr], [3], [n + 1], ...
 };
 
-struct VarInit {
+export struct VarInit {
     std::string name;
     std::shared_ptr<Symbol> resolvedSym = nullptr;
     Expr* init = nullptr;
 };
 
-struct VarDecl : Stmt{
+export struct VarDecl : Stmt{
     bool isConst = false;
     bool isAuto = false;
     TypeName *typeName = nullptr;   // пустая при isAuto == true
     std::vector<VarInit*> vars;
 };
 
-struct CastExpr : Expr{
+export struct CastExpr : Expr{
     TypeName *targetType = nullptr;
     Expr *value;
 };
@@ -187,7 +191,7 @@ struct CastExpr : Expr{
 
 //  Объявления верхнего уровня 
 
-struct Param{
+export struct Param{
     bool isConst = false;
     bool isAuto = false;
     TypeName *typeName = nullptr;
@@ -196,7 +200,7 @@ struct Param{
     Expr *defaultValue = nullptr;
 };
 
-struct FuncDecl : Stmt{
+export struct FuncDecl : Stmt{
     TypeName *returnType = nullptr;
     std::string name;
     std::vector<Param> params;
@@ -205,7 +209,7 @@ struct FuncDecl : Stmt{
     std::shared_ptr<FuncInfo> resolvedInfo = nullptr;
 };
 
-struct StructField{
+export struct StructField{
     bool isConst = false;
     bool isAuto = false;
     TypeName *typeName = nullptr;
@@ -214,12 +218,12 @@ struct StructField{
     std::shared_ptr<Type> resolvedType = nullptr;
 };
 
-struct StructDecl : Stmt{
+export struct StructDecl : Stmt{
     std::string name;
     std::vector<StructField> fields;
 };
 
-struct ClassDecl : Stmt{
+export struct ClassDecl : Stmt{
     std::string name;
     std::vector<StructField> fields;       //  Поля класса
     std::vector<FuncDecl*> methods;        //  Методы
@@ -228,38 +232,107 @@ struct ClassDecl : Stmt{
     FuncDecl* destructor = nullptr;        //  Деструктор (~имя класса)
 };
 
-struct TypeAlias : Stmt{
+export struct TypeAlias : Stmt{
     std::string alias;
     TypeName *original = nullptr;
 };
 
-struct NamespaceDecl : Stmt{
+export struct NamespaceDecl : Stmt{
     std::string name;
     std::vector<Stmt*> decls;
 };
 
-struct ImportDecl : Stmt{
+export struct ImportDecl : Stmt{
     std::string path;   // "math.lang" или "stdio.h"
     bool isC = false;   // true для import <header.h>
 };
 
-struct ExportDecl : Stmt{
+export struct ExportDecl : Stmt{
     Stmt *decl;         // обёрнутое объявление
 };
 
 // Узел для литерала null
-struct NullLiteral : Expr {};
+export struct NullLiteral : Expr {};
 
 // Узел для символьного литерала
-struct CharLiteral : Expr {
+export struct CharLiteral : Expr {
     char value;
 };
 
-struct Program : ASTNode{
+export struct Program : ASTNode{
     std::vector<Stmt*> imports;
     std::vector<Stmt*> decls;
 };
 
-// Функции
+export struct Scope;
 
-std::expected<std::vector<Stmt*>, std::string> parse(const std::vector<Token>& source, const std::string& filePath = "<source>");
+export enum class SymbolKind {
+    Variable,
+    Function,
+    Struct,
+    Class,
+    TypeAlias,
+    Namespace,
+};
+
+export struct FieldInfo {
+    std::string name;
+    std::shared_ptr<Type> type;
+    bool isConst = false;
+    Expr* defaultValue = nullptr;
+};
+
+export struct StructInfo {
+    std::string name;
+    std::vector<FieldInfo> fields;
+};
+
+export struct ClassInfo {
+    std::string name;
+    std::vector<FieldInfo> fields;
+    std::unordered_map<std::string, std::shared_ptr<FuncInfo>> methods;
+    std::unordered_map<std::string, std::shared_ptr<StructInfo>> nestedStructs;
+    std::shared_ptr<FuncInfo> constructor = nullptr;
+    std::shared_ptr<FuncInfo> destructor = nullptr;
+};
+
+export struct ParamInfo {
+    std::string name;
+    std::shared_ptr<Type> type;
+
+    Expr* defaultValue = nullptr;
+    bool isConst = false;
+};
+
+export struct FuncInfo {
+    std::shared_ptr<Type> returnType;
+    std::vector<ParamInfo> params;
+    bool isExternC = false;
+    bool isVariadic = false;
+};
+
+export struct Symbol {
+    std::string name;
+    SymbolKind kind;
+    std::shared_ptr<Type> type;
+
+    bool isConst = false;
+    bool isExported = false;
+    bool isInitialized = false;
+    bool isAuto = false;
+    TypeName* aliasTarget = nullptr;
+    bool isResolvingAlias = false;
+    Expr* autoInit = nullptr;
+    bool isResolvingAuto = false;
+    std::optional<long long> intConstValue = std::nullopt;
+
+    std::shared_ptr<FuncInfo> funcInfo = nullptr;
+    std::shared_ptr<StructInfo> structInfo = nullptr;
+    std::shared_ptr<ClassInfo> classInfo = nullptr;
+    std::shared_ptr<Scope> namespaceScope = nullptr;
+};
+
+export struct Scope {
+    std::unordered_map<std::string, std::shared_ptr<Symbol>> symbols;
+    std::shared_ptr<Scope> parent = nullptr;
+};

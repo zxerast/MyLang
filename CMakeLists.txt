@@ -1,19 +1,31 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.28)
 
-project(MyLang LANGUAGES CXX)
+project(MyLang LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_SCAN_FOR_MODULES ON)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_executable(lang
-    src/main.cpp
-    src/Lexer.cpp
-    src/Parser.cpp
-    src/Semantic.cpp
-    src/CodeGen.cpp
+add_executable(lang)
+
+target_sources(lang
+    PRIVATE
+        src/main.cpp
+        src/Semantic.cpp
+        src/CodeGen.cpp
+    PRIVATE
+        FILE_SET CXX_MODULES FILES
+            inc/Type.cppm
+            inc/Tokens.cppm
+            inc/Ast.cppm
+            inc/SymbolTable.cppm
+            inc/Semantic.cppm
+            inc/CodeGen.cppm
+            src/Lexer.cpp
+            src/Parser.cpp
 )
 
 target_include_directories(lang

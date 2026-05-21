@@ -3,24 +3,35 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
-#include "Ast.hpp"
-#include "SymbolTable.hpp"
-#include "CodeGen.hpp"
+
+import ast;
+import lexer;
+import parser;
+import semantic;
+import codegen;
 
 int main(int argc, char* argv[]){
     std::string sourcePath;
     std::string outputPath;
+    std::string outputDir;
     bool dumpTokens = false;
     bool dumpAst = false;
 
     for (int i = 1; i < argc; i++){
         std::string arg = argv[i];
-        if (arg == "-o"){
+        if (arg == "-o" || arg == "--output"){
             if (i + 1 >= argc){
-                std::cerr << "error: -o requires an argument\n";
+                std::cerr << "error: " << arg << " requires an argument\n";
                 return 2;
             }
             outputPath = argv[++i];
+        }
+        else if (arg == "--out-dir"){
+            if (i + 1 >= argc){
+                std::cerr << "error: --out-dir requires an argument\n";
+                return 2;
+            }
+            outputDir = argv[++i];
         }
         else if (arg == "--dump-tokens"){
             dumpTokens = true;
@@ -29,7 +40,7 @@ int main(int argc, char* argv[]){
             dumpAst = true;
         }
         else if (arg == "-h" || arg == "--help"){
-            std::cout << "Usage: myc <source> [-o <output>] [--dump-tokens] [--dump-ast]\n";
+            std::cout << "Usage: myc <source> [-o <output>] [--out-dir <dir>] [--dump-tokens] [--dump-ast]\n";
             return 0;
         }
         else if (!arg.empty() && arg[0] == '-'){
@@ -46,7 +57,12 @@ int main(int argc, char* argv[]){
     }
 
     if (sourcePath.empty()){
-        std::cerr << "Usage: myc <source> [-o <output>] [--dump-tokens] [--dump-ast]\n";
+        std::cerr << "Usage: myc <source> [-o <output>] [--out-dir <dir>] [--dump-tokens] [--dump-ast]\n";
+        return 2;
+    }
+
+    if (!outputPath.empty() && !outputDir.empty()) {
+        std::cerr << "error: -o/--output cannot be combined with --out-dir\n";
         return 2;
     }
 
@@ -137,8 +153,10 @@ int main(int argc, char* argv[]){
 
     if (outputPath.empty()){
         outputPath = std::filesystem::path(sourcePath).stem().string();
+        if (!outputDir.empty()) {
+            outputPath = (std::filesystem::path(outputDir) / outputPath).string();
+        }
     }
-    outputPath = (std::filesystem::path("executables") / std::filesystem::path(outputPath).filename()).string();
 
     CodeGen codegen;
     auto codegenResult = codegen.generate(&program, outputPath);

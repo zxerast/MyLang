@@ -1,10 +1,11 @@
-#pragma once
+module;
 
 #include <string>
 #include <vector>
-#include <expected>
 
-enum class TokenType {   // Тип токенов
+export module tokens;
+
+export enum class TokenType {   // Тип токенов
     Number,
     StringLit,
     CharLit,
@@ -65,7 +66,7 @@ enum class TokenType {   // Тип токенов
     End,
 };
 
-struct Token {
+export struct Token {
 
     TokenType type;  // Один токен типа выше
     std::string lexeme; // Токен в виде строки
@@ -83,8 +84,3 @@ struct Token {
         this->lexeme = lexeme;
     }
 };
-
-
-
-std::expected<std::vector<Token>, std::string> tokenize(const std::string& source, const std::string& filePath = "<source>");
-Token typeIdentifier(const std::string& elem);

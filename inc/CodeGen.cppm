@@ -1,30 +1,36 @@
-#pragma once
+module;
 
-#include "Ast.hpp"
-#include "Type.hpp"
+#include <cstddef>
 #include <expected>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
-struct LocalVar {
+export module codegen;
+
+import ast;
+import types;
+
+export struct LocalVar {
     int offset;                     //  Отрицательное смещение от rbp
     std::shared_ptr<Type> type;     //  Тип локальной переменной
 };
 
-struct LoopLabels {
+export struct LoopLabels {
     std::string breakLabel;     //  break
     std::string continueLabel;  //  continue
 };
 
-struct GlobalVarInit {
+export struct GlobalVarInit {
     VarDecl* decl;
     VarInit* var;
 };
 
-class CodeGen {     //  Буферы секций — собираем в них инструкции, склеиваем в finalize()
+export class CodeGen {     //  Буферы секций — собираем в них инструкции, склеиваем в finalize()
     std::ostringstream rodata;      //  строковые и неизменяемые литералы
     std::ostringstream bss;         //  неинициализированные глобальные переменные
     std::ostringstream text;        //  код

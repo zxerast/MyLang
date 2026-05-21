@@ -1,8 +1,12 @@
-#include "Tokens.hpp"
+module;
+
 #include <iostream>
 #include <vector>
 #include <fstream>
 #include <expected>
+
+export module lexer;
+import tokens;
 
 Token typeIdentifier(const std::string& elem){
     if (elem == "int"){
@@ -112,7 +116,7 @@ Token typeIdentifier(const std::string& elem){
     }
 }
 
-std::expected<std::vector<Token>, std::string> tokenize(const std::string& source, const std::string& filePath){
+export std::expected<std::vector<Token>, std::string> tokenize(const std::string& source, const std::string& filePath){
     std::vector<Token> res;
     int line = 1;
     size_t lineStart = 0;

@@ -1,7 +1,14 @@
-#include "Tokens.hpp"
-#include "Ast.hpp"
+module;
+
+#include <cstddef>
+#include <string>
 #include <vector>
 #include <expected>
+
+export module parser;
+
+import tokens;
+import ast;
 
 struct Parser {
     const std::vector<Token>& source;
@@ -1895,7 +1902,7 @@ struct Parser {
     }
 };
 
-std::expected<std::vector<Stmt*>, std::string> parse(const std::vector<Token>& source, const std::string& filePath) {
+export std::expected<std::vector<Stmt*>, std::string> parse(const std::vector<Token>& source, const std::string& filePath) {
     Parser head(source, filePath);
     std::vector<Stmt*> declarations;
 

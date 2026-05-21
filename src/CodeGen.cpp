@@ -1,12 +1,25 @@
-#include "CodeGen.hpp"
-#include "SymbolTable.hpp"
+module;
+
+#include <algorithm>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
+#include <memory>
 #include <sstream>
 #include <fstream>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+module codegen;
+
+import ast;
+import types;
 
 std::string CodeGen::newLabel(const std::string& hint) {
     return "." + hint + std::to_string(labelCounter++);     //  Установка метки
@@ -161,6 +174,85 @@ static std::string ptrSuffix(const std::shared_ptr<Symbol>& sym) {
     std::ostringstream ss;
     ss << std::hex << raw;
     return ss.str();
+}
+
+static std::string memAt(const std::string& baseReg, int offset) {
+    return "[" + baseReg + " + " + std::to_string(offset) + "]";
+}
+
+static std::string savedIntArgSlot(int savedParamRegStart, int regIndex) {
+    return "[rsp + " + std::to_string((regIndex - savedParamRegStart) * 8) + "]";
+}
+
+static void emitFloatCompare(std::ostringstream& text, Operand op, const char* cmpInstr) {
+    text << "    " << cmpInstr << " xmm0, xmm1\n";
+    const char* cc = "e";
+    bool notEqual = false;
+
+    switch (op) {
+        case Operand::Less: cc = "b";  break;
+        case Operand::Greater: cc = "a";  break;
+        case Operand::LessEqual: cc = "be"; break;
+        case Operand::GreaterEqual: cc = "ae"; break;
+        case Operand::EqualEqual: cc = "e";  break;
+        case Operand::NotEqual:
+            cc = "ne";
+            notEqual = true;
+            break;
+        default: break;
+    }
+
+    text << "    set" << cc << " al\n";
+    if (notEqual) {
+        text << "    setp dl\n";
+        text << "    or al, dl\n";
+    }
+    else {
+        text << "    setnp dl\n";
+        text << "    and al, dl\n";
+    }
+    text << "    movzx rax, al\n";
+}
+
+static void emitFloatPow(std::ostringstream& text, bool isFloat32) {
+    if (isFloat32) {
+        text << "    sub rsp, 8\n";
+        text << "    movd dword [rsp], xmm0\n";
+        text << "    movd dword [rsp + 4], xmm1\n";
+        text << "    fld dword [rsp + 4]\n";
+        text << "    fld dword [rsp]\n";
+    }
+    else {
+        text << "    sub rsp, 16\n";
+        text << "    movq qword [rsp], xmm0\n";
+        text << "    movq qword [rsp + 8], xmm1\n";
+        text << "    fld qword [rsp + 8]\n";
+        text << "    fld qword [rsp]\n";
+    }
+
+    text << "    fyl2x\n";
+    text << "    fld st0\n";
+    text << "    frndint\n";
+    text << "    fsub st1, st0\n";
+    text << "    fxch st1\n";
+    text << "    f2xm1\n";
+    text << "    fld1\n";
+    text << "    faddp st1, st0\n";
+    text << "    fscale\n";
+    text << "    fstp st1\n";
+
+    if (isFloat32) {
+        text << "    fstp dword [rsp]\n";
+        text << "    movd xmm0, dword [rsp]\n";
+        text << "    add rsp, 8\n";
+        text << "    movd eax, xmm0\n";
+    }
+    else {
+        text << "    fstp qword [rsp]\n";
+        text << "    movq xmm0, qword [rsp]\n";
+        text << "    add rsp, 16\n";
+        text << "    movq rax, xmm0\n";
+    }
 }
 
 //  Инициализирует слот глобалки в прологе main. Логика зеркалит локальный VarDecl,
@@ -401,25 +493,22 @@ std::string CodeGen::symbolLabel(const std::shared_ptr<Symbol>& sym, const std::
         bool alreadyQualified = sym->name.find("::") != std::string::npos;
         bool isExternC = sym->funcInfo && sym->funcInfo->isExternC;
         bool isPrivateFunction = sym->kind == SymbolKind::Function && !sym->isExported && sym->name != "main" && !isBuiltin && !isExternC;
-
-        auto makeLabel = [&](const std::string& name) {
-            std::string label = mangleQualifiedName(name);
-            if (isPrivateFunction) {
-                label += "__private_" + ptrSuffix(sym);
-            }
-            return label;
-        };
+        std::string labelName = sym->name;
 
         if (sym->kind == SymbolKind::Function && !isBuiltin && !alreadyQualified) {
             if (!currentNamespace.empty()) {
-                return makeLabel(currentNamespace + "::" + sym->name);
+                labelName = currentNamespace + "::" + sym->name;
             }
-            if (fallbackName.find("::") != std::string::npos) {
-                return makeLabel(fallbackName);
+            else if (fallbackName.find("::") != std::string::npos) {
+                labelName = fallbackName;
             }
         }
 
-        return makeLabel(sym->name);
+        std::string label = mangleQualifiedName(labelName);
+        if (isPrivateFunction) {
+            label += "__private_" + ptrSuffix(sym);
+        }
+        return label;
     }
     return mangleQualifiedName(fallbackName);
 }
@@ -732,7 +821,6 @@ void CodeGen::emitCastFromTo(const std::shared_ptr<Type>& from, const std::share
     }
 
     if (from->kind == to->kind) {
-        emitNormalizeRax(to);
         return;
     }
 
@@ -1155,30 +1243,26 @@ void CodeGen::emitDefaultAt(const std::string& dstReg, int offset, const std::sh
         return;
     }
 
-    auto addrAt = [&](int off) {
-        return "[" + dstReg + " + " + std::to_string(off) + "]";
-    };
-
     switch (type->kind) {
         case TypeKind::Int8:
         case TypeKind::Uint8:
         case TypeKind::Bool:
-            text << "    mov byte " << addrAt(offset) << ", 0\n";
+            text << "    mov byte " << memAt(dstReg, offset) << ", 0\n";
             break;
 
         case TypeKind::Char:
-            text << "    mov byte " << addrAt(offset) << ", '0'\n";
+            text << "    mov byte " << memAt(dstReg, offset) << ", '0'\n";
             break;
 
         case TypeKind::Int16:
         case TypeKind::Uint16:
-            text << "    mov word " << addrAt(offset) << ", 0\n";
+            text << "    mov word " << memAt(dstReg, offset) << ", 0\n";
             break;
 
         case TypeKind::Int32:
         case TypeKind::Uint32:
         case TypeKind::Float32:
-            text << "    mov dword " << addrAt(offset) << ", 0\n";
+            text << "    mov dword " << memAt(dstReg, offset) << ", 0\n";
             break;
 
         case TypeKind::Int64:
@@ -1186,20 +1270,20 @@ void CodeGen::emitDefaultAt(const std::string& dstReg, int offset, const std::sh
         case TypeKind::Float64:
         case TypeKind::Class:
         case TypeKind::Null:
-            text << "    mov qword " << addrAt(offset) << ", 0\n";
+            text << "    mov qword " << memAt(dstReg, offset) << ", 0\n";
             break;
 
         case TypeKind::String: {
             std::string label = internString("NULL");
             text << "    lea rax, [rel " << label << "]\n";
-            text << "    mov qword " << addrAt(offset) << ", rax\n";
+            text << "    mov qword " << memAt(dstReg, offset) << ", rax\n";
             break;
         }
 
         case TypeKind::DynArray:
-            text << "    mov qword " << addrAt(offset)      << ", 0\n";
-            text << "    mov qword " << addrAt(offset + 8)  << ", 0\n";
-            text << "    mov qword " << addrAt(offset + 16) << ", 0\n";
+            text << "    mov qword " << memAt(dstReg, offset)      << ", 0\n";
+            text << "    mov qword " << memAt(dstReg, offset + 8)  << ", 0\n";
+            text << "    mov qword " << memAt(dstReg, offset + 16) << ", 0\n";
             break;
 
         case TypeKind::Array: {
@@ -1236,7 +1320,7 @@ void CodeGen::emitDefaultAt(const std::string& dstReg, int offset, const std::sh
         }
 
         case TypeKind::Alias:
-            text << "    mov qword " << addrAt(offset) << ", 0\n";
+            text << "    mov qword " << memAt(dstReg, offset) << ", 0\n";
             break;
 
 
@@ -1720,7 +1804,8 @@ void CodeGen::compileDecl(Stmt* decl, const std::string& classPrefix) {
     if (!decl) return;
 
     if (auto* func = dynamic_cast<FuncDecl*>(decl)) {   //  Компилируем функцию
-        if (func->name == "main") hasMain = true;
+        if (func->name == "main") 
+            hasMain = true;
         std::string saveName = func->name;
 
         if (!classPrefix.empty()) {
@@ -1760,11 +1845,20 @@ void CodeGen::compileDecl(Stmt* decl, const std::string& classPrefix) {
 
     if (auto* ns = dynamic_cast<NamespaceDecl*>(decl)) {
         std::string prefix;
-        if (classPrefix.empty()) prefix = ns->name;
-        else                     prefix = classPrefix + "::" + ns->name;
+        if (classPrefix.empty()) {
+            prefix = ns->name;
+        }
+        else {
+            prefix = classPrefix + "::" + ns->name;
+        }
+
         std::string prevNamespace = currentNamespace;
         currentNamespace = prefix;
-        for (auto* stmt : ns->decls) compileDecl(stmt, prefix);    //  Функции из namespace помечаем префиксом чтобы различить
+
+        for (auto* stmt : ns->decls) {
+            compileDecl(stmt, prefix);    //  Функции из namespace помечаем префиксом чтобы различить
+        }
+        
         currentNamespace = prevNamespace;
         return;
     }
@@ -1850,13 +1944,12 @@ std::expected<void, std::string> CodeGen::generate(Program* program, const std::
             }
         }
         int size = sizeOfType(type);
-        if (size < 8) size = 8;
         bss << globalLabel(global.var->resolvedSym) << ": resb " << size << "\n";
     }
 
     //  Компилируем каждую функцию верхнего уровня (включая методы классов)
     hasMain = false;
-    for (auto* decl : program->imports) {
+    for (auto* decl : program->imports) {   //  Сперва компилируем импорты
         bool isImportMain = false;
 
         if (auto* func = dynamic_cast<FuncDecl*>(decl)) {
@@ -1868,11 +1961,14 @@ std::expected<void, std::string> CodeGen::generate(Program* program, const std::
             }
         }
 
-        if (!isImportMain) {
+        if (!isImportMain) {    //  Импорты не должны содержать main
             compileDecl(decl, "");
         }
+        else {
+            return std::unexpected("Imported module must not define entry point 'main'");
+        }
     }
-    for (auto* decl : program->decls) {
+    for (auto* decl : program->decls) { //  После импортов проходимся по основному файлу
         compileDecl(decl, "");
     }
 
@@ -1921,12 +2017,12 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
     currentCallAlignOffset = 0;
 
     auto previousReturnType = currentReturnType;
-    currentReturnType = returnType(func);
+    currentReturnType = returnType(func);   //  Выбираем тип возврата
 
     bool previousHasSRet = currentHasSRet;
     int previousSRetOffset = currentSRetOffset;
 
-    currentHasSRet = isCompositeMemoryType(currentReturnType);
+    currentHasSRet = isCompositeMemoryType(currentReturnType);  //  Возвращает ли функция композитный тип
     currentSRetOffset = 0;
 
     std::string symbol = functionLabel(func);
@@ -1996,10 +2092,6 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
         }
     }
 
-    auto savedIntArg = [&](int regIndex) {
-        return "[rsp + " + std::to_string((regIndex - savedParamRegStart) * 8) + "]";
-    };
-
     for (const auto& param : func->params) {
         const LocalVar* localVar = findLocal(param.resolvedSym);
         auto paramType = localVar ? localVar->type : nullptr;
@@ -2008,14 +2100,13 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
             continue;
         }
 
-        bool isFloat = paramType &&
-            (paramType->kind == TypeKind::Float32 || paramType->kind == TypeKind::Float64);
+        bool isFloat = paramType && (paramType->kind == TypeKind::Float32 || paramType->kind == TypeKind::Float64);
 
         // Все составные параметры передаются как адрес source-объекта.
         // Callee сразу делает value-copy в свой локальный слот.
         if (isCompositeMemoryType(paramType)) {
             if (intIdx < 6) {
-                text << "    mov rsi, " << savedIntArg(intIdx++) << "\n";
+                text << "    mov rsi, " << savedIntArgSlot(savedParamRegStart, intIdx++) << "\n";
             }
             else {
                 int stackOffset = 16 + stackIdx++ * 8;
@@ -2042,7 +2133,7 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
 
         // scalar int/string/bool/char/pointer-подобные параметры в регистрах.
         if (intIdx < 6) {
-            text << "    mov rax, " << savedIntArg(intIdx++) << "\n";
+            text << "    mov rax, " << savedIntArgSlot(savedParamRegStart, intIdx++) << "\n";
             emitStore("[rbp" + std::to_string(localVar->offset) + "]", paramType);
             continue;
         }
@@ -3042,77 +3133,6 @@ void CodeGen::compileExpr(Expr* expr) {
                 text << "    movq xmm0, rax\n";
             }
 
-            auto emitFloatCompare = [&](const char* cmpInstr) {
-                text << "    " << cmpInstr << " xmm0, xmm1\n";
-                const char* cc = "e";
-                bool notEqual = false;
-
-                switch (bin->op) {
-                    case Operand::Less: cc = "b";  break;
-                    case Operand::Greater: cc = "a";  break;
-                    case Operand::LessEqual: cc = "be"; break;
-                    case Operand::GreaterEqual: cc = "ae"; break;
-                    case Operand::EqualEqual: cc = "e";  break;
-                    case Operand::NotEqual:
-                        cc = "ne";
-                        notEqual = true;
-                        break;
-                    default: break;
-                }
-
-                text << "    set" << cc << " al\n";
-                if (notEqual) {
-                    text << "    setp dl\n";
-                    text << "    or al, dl\n";
-                }
-                else {
-                    text << "    setnp dl\n";
-                    text << "    and al, dl\n";
-                }
-                text << "    movzx rax, al\n";
-            };
-
-            auto emitFloatPow = [&](bool isFloat32) {
-                if (isFloat32) {
-                    text << "    sub rsp, 8\n";
-                    text << "    movd dword [rsp], xmm0\n";
-                    text << "    movd dword [rsp + 4], xmm1\n";
-                    text << "    fld dword [rsp + 4]\n";
-                    text << "    fld dword [rsp]\n";
-                }
-                else {
-                    text << "    sub rsp, 16\n";
-                    text << "    movq qword [rsp], xmm0\n";
-                    text << "    movq qword [rsp + 8], xmm1\n";
-                    text << "    fld qword [rsp + 8]\n";
-                    text << "    fld qword [rsp]\n";
-                }
-
-                text << "    fyl2x\n";
-                text << "    fld st0\n";
-                text << "    frndint\n";
-                text << "    fsub st1, st0\n";
-                text << "    fxch st1\n";
-                text << "    f2xm1\n";
-                text << "    fld1\n";
-                text << "    faddp st1, st0\n";
-                text << "    fscale\n";
-                text << "    fstp st1\n";
-
-                if (isFloat32) {
-                    text << "    fstp dword [rsp]\n";
-                    text << "    movd xmm0, dword [rsp]\n";
-                    text << "    add rsp, 8\n";
-                    text << "    movd eax, xmm0\n";
-                }
-                else {
-                    text << "    fstp qword [rsp]\n";
-                    text << "    movq xmm0, qword [rsp]\n";
-                    text << "    add rsp, 16\n";
-                    text << "    movq rax, xmm0\n";
-                }
-            };
-
             if (numericType->kind == TypeKind::Float32) {
                 switch (bin->op) {
                     case Operand::Add: text << "    addss xmm0, xmm1\n"; break;
@@ -3120,7 +3140,7 @@ void CodeGen::compileExpr(Expr* expr) {
                     case Operand::Mul: text << "    mulss xmm0, xmm1\n"; break;
                     case Operand::Div: text << "    divss xmm0, xmm1\n"; break;
                     case Operand::Pow:
-                        emitFloatPow(true);
+                        emitFloatPow(text, true);
                         return;
                     case Operand::Less:
                     case Operand::Greater:
@@ -3128,7 +3148,7 @@ void CodeGen::compileExpr(Expr* expr) {
                     case Operand::GreaterEqual:
                     case Operand::EqualEqual:
                     case Operand::NotEqual:
-                        emitFloatCompare("ucomiss");
+                        emitFloatCompare(text, bin->op, "ucomiss");
                         return;
                     default: break;
                 }
@@ -3141,7 +3161,7 @@ void CodeGen::compileExpr(Expr* expr) {
                     case Operand::Mul: text << "    mulsd xmm0, xmm1\n"; break;
                     case Operand::Div: text << "    divsd xmm0, xmm1\n"; break;
                     case Operand::Pow:
-                        emitFloatPow(false);
+                        emitFloatPow(text, false);
                         return;
                     case Operand::Less:
                     case Operand::Greater:
@@ -3149,7 +3169,7 @@ void CodeGen::compileExpr(Expr* expr) {
                     case Operand::GreaterEqual:
                     case Operand::EqualEqual:
                     case Operand::NotEqual:
-                        emitFloatCompare("ucomisd");
+                        emitFloatCompare(text, bin->op, "ucomisd");
                         return;
                     default: break;
                 }
@@ -3745,20 +3765,15 @@ void CodeGen::compileExpr(Expr* expr) {
 
         static const char* intRegs[6] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
 
-        auto callArgType = [&](size_t index) -> std::shared_ptr<Type> {
-            if (funcInfo && index < funcInfo->params.size()) {
-                return funcInfo->params[index].type;
-            }
-            return exprType(fc->args[index]);
-        };
-
         int expectedStackArgCount = 0;
         {
             int scanIntIdx = returnsComposite ? 1 : 0;
             int scanXmmIdx = 0;
 
             for (size_t i = 0; i < fc->args.size(); ++i) {
-                auto argType = callArgType(i);
+                auto argType = (funcInfo && i < funcInfo->params.size())
+                    ? funcInfo->params[i].type
+                    : exprType(fc->args[i]);
                 bool isFloat = argType &&
                     (argType->kind == TypeKind::Float32 || argType->kind == TypeKind::Float64);
 
@@ -3897,11 +3912,6 @@ std::expected<void, std::string> CodeGen::finalize(const std::string& outPath) {
         }
     }
 
-    auto cleanupTemps = [&]() {
-        std::remove(asmPath.c_str());
-        std::remove(objPath.c_str());
-    };
-
     //  Склеиваем секции в итоговый файл
     std::ofstream out(asmPath);
     if (!out)
@@ -3923,7 +3933,7 @@ std::expected<void, std::string> CodeGen::finalize(const std::string& outPath) {
     std::string quotedOutPath = shellQuote(outPath);
     std::string nasmCmd = "nasm -f elf64 " + quotedAsmPath + " -o " + quotedObjPath;
     if (std::system(nasmCmd.c_str()) != 0) {
-        cleanupTemps();
+        std::remove(objPath.c_str());
         return std::unexpected("codegen: nasm failed on '" + asmPath + "'");
     }
 
@@ -3935,11 +3945,11 @@ std::expected<void, std::string> CodeGen::finalize(const std::string& outPath) {
     else
         ldCmd = "ld " + quotedObjPath + " runtime/*.o -o " + quotedOutPath;
     if (std::system(ldCmd.c_str()) != 0) {
-        cleanupTemps();
+        std::remove(objPath.c_str());
         return std::unexpected("codegen: linker failed");
     }
 
     //  Чистим промежуточные файлы генерации
-    cleanupTemps();
+    std::remove(objPath.c_str());
     return {};
 }

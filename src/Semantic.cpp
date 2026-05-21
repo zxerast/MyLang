@@ -1,5 +1,7 @@
-#include "SymbolTable.hpp"
-#include "Ast.hpp"
+module;
+
+#include <algorithm>
+#include <cstdint>
 #include <expected>
 #include <fstream>
 #include <iostream>
@@ -9,6 +11,21 @@
 #include <limits>
 #include <unordered_set>
 #include <clang-c/Index.h>
+
+module semantic;
+
+import ast;
+import lexer;
+import parser;
+import symbol_table;
+import types;
+
+struct CImportVisitorCtx {
+    std::string wantedBase;
+    SymbolTable* table;
+    int registered = 0;
+    int skipped = 0;
+};
 
 // функции для работы с типами
 
@@ -38,7 +55,7 @@ static bool typesEqual(const std::shared_ptr<Type>& a, const std::shared_ptr<Typ
     if (!a || !b) {     //  Кого-то из типов несуществует
         return false;
     }     
-    if (a->kind != b->kind) {   //  Если типы объекты разные по сущности (kind из Type.hpp)
+    if (a->kind != b->kind) {   //  Если типы объекты разные по сущности (kind из модуля types)
         return false;
     }
     if (a->kind == TypeKind::Array) {   //  Массивы рекурсивно проверяем по типам элементов
@@ -614,7 +631,7 @@ void SemanticAnalyzer::registerBuiltins() {
         sym->funcInfo = std::make_shared<FuncInfo>();   //  Указатель на поля функции  
         sym->funcInfo->returnType = makeType(TypeKind::Void);   //  Какой тип на самом деле функция возвращает
         //  параметры не фиксируем — print принимает что угодно
-        table.declare(sym); //  Все встроенные функции по умолчанию лежат в таблице
+        (void)table.declare(sym); //  Все встроенные функции по умолчанию лежат в таблице
     }
     //  input — без аргументов, возвращаемый тип берётся из контекста
     {
@@ -624,7 +641,7 @@ void SemanticAnalyzer::registerBuiltins() {
         sym->type = nullptr;    //  auto тип 
         sym->funcInfo = std::make_shared<FuncInfo>();
         sym->funcInfo->returnType = nullptr;
-        table.declare(sym);
+        (void)table.declare(sym);
     }
     //  len — принимает массив или строку, возвращает int32
     {
@@ -634,7 +651,7 @@ void SemanticAnalyzer::registerBuiltins() {
         sym->type = makeType(TypeKind::Int32);
         sym->funcInfo = std::make_shared<FuncInfo>();
         sym->funcInfo->returnType = makeType(TypeKind::Int32);
-        table.declare(sym);
+        (void)table.declare(sym);
     }
     //  exit — принимает int (код возврата), возвращает void
     {
@@ -645,7 +662,7 @@ void SemanticAnalyzer::registerBuiltins() {
         sym->funcInfo = std::make_shared<FuncInfo>();
         sym->funcInfo->returnType = makeType(TypeKind::Void);
         sym->funcInfo->params.push_back({"code", makeType(TypeKind::Int32)});
-        table.declare(sym);
+        (void)table.declare(sym);
     }
     //  panic — принимает string (сообщение об ошибке), аварийно завершает программу
     {
@@ -656,7 +673,7 @@ void SemanticAnalyzer::registerBuiltins() {
         sym->funcInfo = std::make_shared<FuncInfo>();
         sym->funcInfo->returnType = makeType(TypeKind::Void);
         sym->funcInfo->params.push_back({"msg", makeType(TypeKind::String)});
-        table.declare(sym);
+        (void)table.declare(sym);
     }
     //  push — добавить элемент в конец динамического массива
     {
@@ -666,7 +683,7 @@ void SemanticAnalyzer::registerBuiltins() {
         sym->type = makeType(TypeKind::Void);
         sym->funcInfo = std::make_shared<FuncInfo>();
         sym->funcInfo->returnType = makeType(TypeKind::Void);
-        table.declare(sym);
+        (void)table.declare(sym);
     }
     //  pop — удалить и вернуть последний элемент массива
     {
@@ -676,7 +693,7 @@ void SemanticAnalyzer::registerBuiltins() {
         sym->type = makeType(TypeKind::Void);
         sym->funcInfo = std::make_shared<FuncInfo>();
         sym->funcInfo->returnType = makeType(TypeKind::Void);
-        table.declare(sym);
+        (void)table.declare(sym);
     }
 }
 
@@ -2304,7 +2321,7 @@ bool SemanticAnalyzer::declareTopLevelSymbol(std::shared_ptr<Symbol> sym, Stmt* 
         return false;
     }
 
-    table.declare(sym); //  Спокойно добавляем в таблицу если не нашли символ
+    (void)table.declare(sym); //  Спокойно добавляем в таблицу если не нашли символ
     return true;
 }
 
@@ -3045,7 +3062,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             selfSym->kind = SymbolKind::Variable;
             selfSym->type = selfieldType;
             selfSym->isInitialized = true;
-            table.declare(selfSym);
+            (void)table.declare(selfSym);
 
             if (currMethod != classSym->classInfo->methods.end()) {
                 for (size_t j = 0; j < method->params.size(); j++) {
@@ -3092,7 +3109,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             selfSym->kind = SymbolKind::Variable;
             selfSym->type = selfieldType;
             selfSym->isInitialized = true;
-            table.declare(selfSym);
+            (void)table.declare(selfSym);
 
             if (classSym->classInfo->constructor) {
                 for (size_t j = 0; j < clas->constructor->params.size(); j++) {
@@ -3135,7 +3152,7 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             selfSym->kind = SymbolKind::Variable;
             selfSym->type = selfieldType;
             selfSym->isInitialized = true;
-            table.declare(selfSym);
+            (void)table.declare(selfSym);
 
             for (auto* stmt : clas->destructor->body->statements) {
                 analyzeStmt(stmt);
@@ -3342,7 +3359,7 @@ void SemanticAnalyzer::importExportedSymbolsFrom(SemanticAnalyzer& module) {
         }
 
         //  Остальное добавляем в основную таблицу символов
-        table.declare(sym);
+        (void)table.declare(sym);
     }
 }
 
