@@ -1,0 +1,40 @@
+import "lists.lang"
+
+int main() {
+    Lists lists = Lists();
+
+    Lists::IntList a = lists.new_list();
+    Lists::IntList b = lists.new_list();
+    Lists::IntList empty = lists.new_list();
+
+    a = lists.push_back(a, 10);
+    a = lists.push_back(a, 20);
+    a = lists.push_back(a, 30);
+    a = lists.push_front(a, 5);
+
+    b = lists.push_back(b, 100);
+    b = lists.push_back(b, 200);
+    b = lists.push_front(b, 50);
+
+    print("list a:");
+    lists.print_list(a);
+
+    print("list b:");
+    lists.print_list(b);
+
+    a = lists.delete_first(a, 5);
+    a = lists.delete_first(a, 20);
+    a = lists.delete_first(a, 999);
+
+    print("list a after deleting 5, 20, 999");
+    lists.print_list(a);
+
+    b = lists.reverse(b);
+    print("list b reversed:");
+    lists.print_list(b);
+
+    empty = lists.push_back(empty, 777);
+    empty = lists.delete_first(empty, 777);
+
+    return 0;
+}

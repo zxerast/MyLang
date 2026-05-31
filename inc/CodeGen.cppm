@@ -128,6 +128,7 @@ export class CodeGen {     //  Буферы секций — собираем в
     std::string mangleNamespaceAccess(const NamespaceAccess* access) const;
 
     std::vector<GlobalVarInit> globalVars;                                         //  Глобальные переменные в порядке объявления — для детерминированной инициализации
+    void compileEarlyConstGlobalInit(const GlobalVarInit& global);                 //  Ранняя инициализация const-целых для default-полей
     void compileGlobalInit(VarDecl* decl, VarInit* var);                           //  Инициализация одной глобалки в прологе main
     bool emitDynArrayAddr(Expr* e, const char* reg);                              //  Адрес DynArray-источника (локалка / self-поле / ClassName.field / глобалка) в reg
 

@@ -1,0 +1,201 @@
+string SOURCE;
+int POS;
+bool PARSE_ERROR;
+string ERROR_MESSAGE;
+
+void set_error(string message) {
+    if (!PARSE_ERROR) {
+        PARSE_ERROR = true;
+        ERROR_MESSAGE = message;
+    }
+}
+
+bool is_blank(string text) {
+    int i = 0;
+    while (i < len(text)) {
+        if (!(cast<int>(text[i]) == 32 || cast<int>(text[i]) == 9 || cast<int>(text[i]) == 13)) {
+            return false;
+        }
+
+        i++;
+    }
+
+    return true;
+}
+
+char peek() {
+    if (POS >= len(SOURCE)) {
+        return '\0';
+    }
+
+    return SOURCE[POS];
+}
+
+void skip_spaces() {
+    while (POS < len(SOURCE) && (cast<int>(SOURCE[POS]) == 32 || cast<int>(SOURCE[POS]) == 9 || cast<int>(SOURCE[POS]) == 13)) {
+        POS++;
+    }
+}
+
+bool match(char expected) {
+    skip_spaces();
+
+    if (peek() == expected) {
+        POS++;
+        return true;
+    }
+
+    return false;
+}
+
+int parse_number() {
+    skip_spaces();
+
+    int value = 0;
+    bool has_digit = false;
+
+    while (POS < len(SOURCE) && (cast<int>(SOURCE[POS]) >= 48 && cast<int>(SOURCE[POS]) <= 57)) {
+        value = value * 10 + (cast<int>(SOURCE[POS]) - 48);
+        has_digit = true;
+        POS++;
+    }
+
+    if (!has_digit) {
+        set_error("expected number");
+    }
+
+    return value;
+}
+
+int parse_primary() {
+    skip_spaces();
+
+    if (match('(')) {
+        int value = parse_expression();
+
+        if (!match(')')) {
+            set_error("expected ')'");
+        }
+
+        return value;
+    }
+
+    return parse_number();
+}
+
+int parse_unary() {
+    skip_spaces();
+
+    if (match('+')) {
+        return parse_unary();
+    }
+
+    if (match('-')) {
+        return -parse_unary();
+    }
+
+    return parse_primary();
+}
+
+int parse_power() {
+    int base = parse_unary();
+
+    skip_spaces();
+    if (match('^')) {
+        return base ^ parse_power();
+    }
+
+    return base;
+}
+
+int parse_mul() {
+    int value = parse_power();
+
+    while (!PARSE_ERROR) {
+        if (match('*')) {
+            value *= parse_power();
+        }
+        else if (match('/')) {
+            int right = parse_power();
+
+            if (right == 0) {
+                set_error("division by zero");
+                return 0;
+            }
+
+            value /= right;
+        }
+        else if (match('%')) {
+            int right = parse_power();
+
+            if (right == 0) {
+                set_error("modulo by zero");
+                return 0;
+            }
+
+            value %= right;
+        }
+        else {
+            return value;
+        }
+    }
+
+    return value;
+}
+
+int parse_expression() {
+    int value = parse_mul();
+
+    while (!PARSE_ERROR) {
+        if (match('+')) {
+            value += parse_mul();
+        }
+        else if (match('-')) {
+            value -= parse_mul();
+        }
+        else {
+            return value;
+        }
+    }
+
+    return value;
+}
+
+void evaluate(string line) {
+    SOURCE = line;
+    POS = 0;
+    PARSE_ERROR = false;
+    ERROR_MESSAGE = "";
+
+    int result = parse_expression();
+    skip_spaces();
+
+    if (!PARSE_ERROR && POS < len(SOURCE)) {
+        set_error("unexpected symbol");
+    }
+
+    if (PARSE_ERROR) {
+        print("error:", ERROR_MESSAGE);
+    }
+    else {
+        print(result);
+    }
+}
+
+int main() {
+    while (true) {
+        print(">_________");
+
+        string line = input();
+
+        if (line == "exit") {
+            return 0;
+        }
+
+        if (!is_blank(line)) {
+            evaluate(line);
+        }
+    }
+
+    return 0;
+}

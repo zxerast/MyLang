@@ -60,7 +60,7 @@ else()
     )
 
     if(NOT CLANG_INCLUDE_DIR OR NOT CLANG_LIBRARY)
-        message(FATAL_ERROR "libclang was not found. Install libclang development files or set CLANG_INCLUDE_DIR and CLANG_LIBRARY.")
+        message(FATAL_ERROR "libclang was not found.")
     endif()
 
     target_include_directories(lang PRIVATE "${CLANG_INCLUDE_DIR}")

@@ -77,7 +77,7 @@ int CodeGen::sizeOfType(const std::shared_ptr<Type>& type) const{    //  Воз�
         case TypeKind::Struct: {
             auto it = structSizes.find(type->name);
             if (it != structSizes.end()) return it->second;
-            return 8;
+            return -1;
         }
 
         case TypeKind::Alias:
@@ -112,6 +112,12 @@ int CodeGen::advanceLocalFrameSize(int frameSize, const std::shared_ptr<Type>& t
 }
 
 int CodeGen::allocLocal(const std::shared_ptr<Symbol>& sym, const std::shared_ptr<Type>& type) {
+    int localSize = sizeOfType(type);
+    if (localSize < 0) {
+        std::string name = sym ? sym->name : std::string("<temporary>");
+        codegenError(0, 0, "local '" + name + "' has struct type with unknown layout");
+    }
+
     currentFrameSize = advanceLocalFrameSize(currentFrameSize, type);
 
     int offset = -currentFrameSize;
@@ -255,14 +261,32 @@ static void emitFloatPow(std::ostringstream& text, bool isFloat32) {
     }
 }
 
+void CodeGen::compileEarlyConstGlobalInit(const GlobalVarInit& global) {
+    if (!global.decl || !global.decl->isConst || !global.var || !global.var->resolvedSym) {
+        return;
+    }
+
+    auto sym = global.var->resolvedSym;
+    if (!sym->intConstValue.has_value()) {
+        return;
+    }
+
+    auto it = globalsBySymbol.find(sym);
+    if (it == globalsBySymbol.end() || !isIntegerLikeType(it->second)) {
+        return;
+    }
+
+    text << "    mov rax, " << std::to_string(*sym->intConstValue) << "\n";
+    emitStore("[rel " + globalLabel(sym) + "]", it->second);
+}
+
 //  Инициализирует слот глобалки в прологе main. Логика зеркалит локальный VarDecl,
 //  но пишет в .bss-лейбл глобального символа вместо стэковой локалки.
 void CodeGen::compileGlobalInit(VarDecl* decl, VarInit* var) {
     auto type = varInitType(var);
 
     if (!type) {
-        codegenError(decl ? decl->line : 0, decl ? decl->column : 0,
-            "global variable '" + (var ? var->name : std::string("<null>")) + "' has no resolved type");
+        codegenError(decl ? decl->line : 0, decl ? decl->column : 0, "global variable '" + (var ? var->name : std::string("<null>")) + "' has no resolved type");
         return;
     }
 
@@ -271,7 +295,7 @@ void CodeGen::compileGlobalInit(VarDecl* decl, VarInit* var) {
     // Без инициализатора: default прямо в глобальный слот.
     if (!var->init) {
         text << "    lea rdi, [rel " << slot << "]\n";
-        emitDefaultAt("rdi", 0, type);
+        emitRuntimeDefaultAt("rdi", 0, type);
         return;
     }
 
@@ -298,54 +322,6 @@ std::shared_ptr<Type> CodeGen::exprType(Expr* e) const {
     // Тип, проставленный семантикой.
     if (e->resolvedType) {
         return e->resolvedType;
-    }
-
-    if (auto* id = dynamic_cast<Identifier*>(e)) {
-        if (id->resolvedSym && id->resolvedSym->type) {
-            return id->resolvedSym->type;
-        }
-
-        if (id->resolvedField && id->resolvedField->type) {
-            return id->resolvedField->type;
-        }
-
-        return nullptr;
-    }
-
-    if (auto* ns = dynamic_cast<NamespaceAccess*>(e)) {
-        if (ns->resolvedSym && ns->resolvedSym->type) {
-            return ns->resolvedSym->type;
-        }
-
-        if (ns->resolvedSym && ns->resolvedSym->funcInfo) {
-            return ns->resolvedSym->funcInfo->returnType;
-        }
-
-        return nullptr;
-    }
-
-    if (auto* field = dynamic_cast<FieldAccess*>(e)) {
-        return fieldType(field);
-    }
-
-    if (auto* call = dynamic_cast<FuncCall*>(e)) {
-        return callReturnType(call);
-    }
-
-    if (auto* arr = dynamic_cast<ArrayAccess*>(e)) {
-        auto objType = exprType(arr->object);
-
-        if (objType && (objType->kind == TypeKind::Array || objType->kind == TypeKind::DynArray)) {
-            return objType->elementType;
-        }
-
-        if (objType && objType->kind == TypeKind::String) {
-            auto t = std::make_shared<Type>();
-            t->kind = TypeKind::Char;
-            return t;
-        }
-
-        return nullptr;
     }
 
     return nullptr;
@@ -511,14 +487,6 @@ std::string CodeGen::symbolLabel(const std::shared_ptr<Symbol>& sym, const std::
         return label;
     }
     return mangleQualifiedName(fallbackName);
-}
-
-std::string CodeGen::functionLabel(FuncDecl* func) const {
-    if (!func) {
-        return "__function_unresolved_0";
-    }
-
-    return symbolLabel(func->resolvedSym, func->name);
 }
 
 bool CodeGen::isSignedIntType(const std::shared_ptr<Type>& type) {
@@ -1468,9 +1436,7 @@ void CodeGen::emitAddress(Expr* expr) {
 
             int elemSize = 8;
             if (objType->elementType) {
-                elemSize = isCompositeMemoryType(objType->elementType)
-                    ? sizeOfType(objType->elementType)
-                    : codegenDynArrayElemSize(objType->elementType);
+                elemSize = isCompositeMemoryType(objType->elementType) ? sizeOfType(objType->elementType) : codegenDynArrayElemSize(objType->elementType);
             }
 
             if (elemSize == 1) {
@@ -2025,7 +1991,7 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
     currentHasSRet = isCompositeMemoryType(currentReturnType);  //  Возвращает ли функция композитный тип
     currentSRetOffset = 0;
 
-    std::string symbol = functionLabel(func);
+    std::string symbol = symbolLabel(func->resolvedSym, func->name);
     currentEndLabel = ".end_of_" + symbol;  //  Имя метки переводящей в конец, для return
     text << "global " << symbol << "\n";    //  Определяем нашу функцию глобальной
     text << symbol << ":\n";    //  Метка для неё
@@ -2033,10 +1999,10 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
     text << "    push rbp\n";   //  Начало функции
     text << "    mov rbp, rsp\n";
 
-    currentCallAlignOffset = allocLocal(nullptr, nullptr);
+    currentCallAlignOffset = allocLocal(nullptr, nullptr);  //  Резерв для предыдущего rsp перед новым вызовом функции
 
     if (currentHasSRet) {
-        currentSRetOffset = allocLocal(nullptr, nullptr);
+        currentSRetOffset = allocLocal(nullptr, nullptr);   //  Скрытый указатель для возврата составного типа через функцию
     }
 
     if (isMethod) {     //  Метод: self — неявный параметр после hidden return pointer
@@ -2044,10 +2010,10 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
         hasSelfLocal = true;
     }
 
-    for (size_t i = 0; i < func->params.size(); i++) {
+    for (size_t i = 0; i < func->params.size(); i++) {      //  Проходимся по параметрам 
         auto& param = func->params[i];
-        auto type = paramType(func, i);
-        allocLocal(param.resolvedSym, type);
+        auto type = paramType(func, i);                     //  Ставим тип
+        allocLocal(param.resolvedSym, type);                //  И выделяем память под них
     }
 
     int frameUsed = countLocalsSize(func->body, currentFrameSize);
@@ -2057,28 +2023,27 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
         text << "    sub rsp, " << frameSize << "\n";   //  Выделяем
     }
 
-    static const char* intArgRegs[6] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
+    static const char* intArgRegs[6] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};    //  Регистры под параметры
     int intIdx = 0, xmmIdx = 0, stackIdx = 0;
 
-    if (currentHasSRet) {
-        text << "    mov rax, " << intArgRegs[intIdx++] << "\n";
-        emitStore("[rbp" + std::to_string(currentSRetOffset) + "]", nullptr);
+    if (currentHasSRet) {       //  Если функция возвращает составной тип то нужно пропустить первый регистр параметров
+        text << "    mov rax, " << intArgRegs[intIdx++] << "\n";    //  Составной тип может не поиещаться в rax
+        emitStore("[rbp" + std::to_string(currentSRetOffset) + "]", nullptr);   //  Поэтому мы забираем первый "скрытый" параметр под возврат
     }
 
-    if (isMethod) {
+    if (isMethod) {             //  Если это метод то занят уже второй регистр, его тоже нужно пропустить
         text << "    mov rax, " << intArgRegs[intIdx++] << "\n";
         emitStore("[rbp" + std::to_string(selfLocal.offset) + "]", nullptr);
     }
 
-    int savedParamRegStart = intIdx;
-    int savedParamRegEnd = intIdx;
+    int savedParamRegStart = intIdx;    //  Для обычных функций всё идёт как обычно первый параметр rdi, второй rsi
+    int savedParamRegEnd = intIdx;  
     {
         int scanIntIdx = intIdx;
         int scanXmmIdx = xmmIdx;
-        for (const auto& param : func->params) {
+        for (const auto& param : func->params) {    //  Считаем какие регистры хранят реальные, а не скрытые параметры
             auto paramType = param.resolvedSym ? param.resolvedSym->type : nullptr;
-            bool isFloat = paramType &&
-                (paramType->kind == TypeKind::Float32 || paramType->kind == TypeKind::Float64);
+            bool isFloat = paramType && (paramType->kind == TypeKind::Float32 || paramType->kind == TypeKind::Float64);
             if (isFloat && scanXmmIdx < 8) {
                 scanXmmIdx++;
             }
@@ -2087,8 +2052,8 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
             }
         }
         savedParamRegEnd = scanIntIdx;
-        for (int reg = savedParamRegEnd - 1; reg >= savedParamRegStart; --reg) {
-            text << "    push " << intArgRegs[reg] << "\n";
+        for (int reg = savedParamRegEnd - 1; reg >= savedParamRegStart; --reg) {    //  Кидаем их временно на стек
+            text << "    push " << intArgRegs[reg] << "\n";  //  Чтобы случайно не затереть их перед прокидыванием
         }
     }
 
@@ -2153,6 +2118,12 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
     //  В начале main инициализируем runtime default-слоты объявленными default-выражениями
     //  или default-значениями типов. Дальше `Type.field = value` меняет эти слоты уже в runtime.
     if (!isMethod && func->name == "main") {
+        //  Default-поля могут ссылаться на const-целые, например `int left = END`.
+        //  Такие константы должны существовать до заполнения __default_<Struct>_<field>.
+        for (auto& global : globalVars) {
+            compileEarlyConstGlobalInit(global);
+        }
+
         for (auto* sd : structDeclsOrdered) {
             std::string structName = structDeclNames.count(sd) ? structDeclNames[sd] : sd->name;
             for (auto& field : sd->fields) {
@@ -2160,18 +2131,18 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
                 std::string label = "__default_" + mangleQualifiedName(structName) + "_" + field.name;
 
                 if (field.defaultValue) {
-                    if (isCompositeMemoryType(fieldType)) {
+                    if (isCompositeMemoryType(fieldType)) {     //  Ставим заданное значение
                         compileExpr(field.defaultValue);
                         text << "    mov rsi, rax\n";
                         text << "    lea rdi, [rel " << label << "]\n";
                         emitCopy("rdi", "rsi", fieldType);
                     }
-                    else {
+                    else {      //  Или сперва вычисляем значение и потом ставим
                         compileExprAs(field.defaultValue, fieldType);
                         emitStore("[rel " + label + "]", fieldType);
                     }
                 }
-                else {
+                else {  //  Ну или ставим дефолтное значение
                     text << "    lea rdi, [rel " << label << "]\n";
                     emitRuntimeDefaultAt("rdi", 0, fieldType);
                 }
@@ -2215,7 +2186,7 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
 
     text << currentEndLabel << ":\n";   //  Конец функции
     //  Scope-exit: вызываем деструкторы для классовых локалок с ненулевым указателем.
-    //  rax — возвращаемое значение, сохраняем его в aligned-слоте, чтобы call'ы не клобберили.
+    //  rax — возвращаемое значение, сохраняем его в aligned-слоте.
     if (!classLocals.empty()) {
         text << "    sub rsp, 16\n";
         text << "    mov [rsp], rax\n";
@@ -2276,36 +2247,33 @@ void CodeGen::compileStmt(Stmt* stmt) {
     }
     if (auto* var = dynamic_cast<VarDecl*>(stmt)) {
         
-        for (auto* init : var->vars) {
-            std::shared_ptr<Type> type = varInitType(init);
-
+        for (auto* init : var->vars) {      
+            std::shared_ptr<Type> type = varInitType(init); //  Для каждой переменной выделяем локальный слот в стеке
             int off = allocLocal(init->resolvedSym, type);
 
             if (type && type->kind == TypeKind::Class && classDecls.count(type->name) && classDecls[type->name]->destructor) {
-                classLocals.push_back({off, type->name});
+                classLocals.push_back({off, type->name});   //  Запоминаем деструктор класса
             }
             
-            if (init->init) {
+            if (init->init) {   //  Смотрим инициализатор
                 if (type && type->kind == TypeKind::Class) {
                     auto* initCall = dynamic_cast<FuncCall*>(init->init);
-                    bool directStore =
-                        dynamic_cast<NullLiteral*>(init->init) ||
-                        (initCall && initCall->resolvedCallee && initCall->resolvedCallee->kind == SymbolKind::Class);
+                    bool directStore = dynamic_cast<NullLiteral*>(init->init) || (initCall && initCall->resolvedCallee && initCall->resolvedCallee->kind == SymbolKind::Class);
 
-                    if (directStore) {
+                    if (directStore) {  //  Если инициализатор - готовый классовый объект созданный через конструктор
                         compileExprAs(init->init, type);
                         emitStore("[rbp" + std::to_string(off) + "]", type);
                     }
                     else {
-                        compileExpr(init->init);
+                        compileExpr(init->init);    //  Копия классового объекта
                         emitNullCheck("rax", init->init->line);
-                        text << "    push rax\n";
+                        text << "    push rax\n";   //  Сохраняем исходный адрес
                         int size = 8;
                         if (structSizes.count(type->name)) size = structSizes[type->name];
                         if (size <= 0) size = 8;
-                        text << "    mov rdi, " << size << "\n";
+                        text << "    mov rdi, " << size << "\n";    //  Выделяем новую память
                         emitAlignedCall("lang_alloc");
-                        text << "    push rax\n";
+                        text << "    push rax\n";   //  Копируем поля
                         text << "    mov rdi, rax\n";
                         text << "    mov rsi, [rsp + 8]\n";
                         emitCopy("rdi", "rsi", type);
@@ -2314,20 +2282,20 @@ void CodeGen::compileStmt(Stmt* stmt) {
                         emitStore("[rbp" + std::to_string(off) + "]", type);
                     }
                 }
-                else if (isCompositeMemoryType(type)) {
-                    compileExpr(init->init);
+                else if (isCompositeMemoryType(type)) { //  Инициализатор это структура или массив
+                    compileExpr(init->init);    //  В rax адрес на данные
                     text << "    mov rsi, rax\n";
-                    text << "    lea rdi, [rbp" << off << "]\n";
+                    text << "    lea rdi, [rbp" << off << "]\n"; // Переносим их
                     emitCopy("rdi", "rsi", type);
                 }
-                else {
+                else {  //  Обычные стандартные данные
                     compileExprAs(init->init, type);
                     emitStore("[rbp" + std::to_string(off) + "]", type);
                 }
             }
-            else {
+            else {  //  Нет инициализатора заполняем дефолтами
                 text << "    lea rdi, [rbp" << off << "]\n";
-                emitDefaultAt("rdi", 0, type);
+                emitRuntimeDefaultAt("rdi", 0, type);
             }
         }
         return;
@@ -2335,14 +2303,13 @@ void CodeGen::compileStmt(Stmt* stmt) {
     if (auto* assign = dynamic_cast<Assign*>(stmt)) {
         auto targetType = exprType(assign->target);
 
+        //  Делаем примерно тоже самое что и при инициализации
         if (assign->op == AssignOp::Assign && targetType && targetType->kind == TypeKind::Class) {
             emitAddress(assign->target);
             text << "    push rax\n";
 
             auto* valueCall = dynamic_cast<FuncCall*>(assign->value);
-            bool directStore =
-                dynamic_cast<NullLiteral*>(assign->value) ||
-                (valueCall && valueCall->resolvedCallee && valueCall->resolvedCallee->kind == SymbolKind::Class);
+            bool directStore = dynamic_cast<NullLiteral*>(assign->value) || (valueCall && valueCall->resolvedCallee && valueCall->resolvedCallee->kind == SymbolKind::Class);
 
             if (directStore) {
                 compileExprAs(assign->value, targetType);
@@ -2415,36 +2382,40 @@ void CodeGen::compileStmt(Stmt* stmt) {
                 compileExprAs(ret->value, currentReturnType);
             }
         }
-        text << "    jmp " << currentEndLabel << "\n";
+        text << "    jmp " << currentEndLabel << "\n";  //  Прыгаем к ранее проставленной метке ретурна
         return;
     }
-    if (auto* i = dynamic_cast<If*>(stmt)) {
+    if (auto* i = dynamic_cast<If*>(stmt)) {    //  Ставим метку на else и на выход
         std::string elseL = newLabel("else");
         std::string endL  = newLabel("endif");
-        compileExpr(i->condition);
-        text << "    test rax, rax\n";
+        compileExpr(i->condition);  //  Генерируем условие
+        text << "    test rax, rax\n";  //  Смотрим результат
         text << "    jz ";
-        if (i->elseBranch) text << elseL << "\n";
-        else               text << endL  << "\n";
-        compileStmt(i->thenBranch);
-        if (i->elseBranch) {
+        if (i->elseBranch) {    //  Идём в элс
+            text << elseL << "\n";
+        }
+        else {  //  Или в конец
+            text << endL  << "\n";
+        }
+        compileStmt(i->thenBranch); //  Генерим поведение
+        if (i->elseBranch) {    //  Возможно и иное
             text << "    jmp " << endL << "\n";
             text << elseL << ":\n";
             compileStmt(i->elseBranch);
         }
-        text << endL << ":\n";
+        text << endL << ":\n"; //   И прыгаем в конец
         return;
     }
-    if (auto* whileStmt = dynamic_cast<While*>(stmt)) {
+    if (auto* whileStmt = dynamic_cast<While*>(stmt)) { //  Также пишем две метки
         std::string startL = newLabel("while");
         std::string endL   = newLabel("endwhile");
-        loopStack.push_back({endL, startL});
+        loopStack.push_back({endL, startL});    //  В стек вкладываем вложенные метки для вложенных циклов
         text << startL << ":\n";
-        compileExpr(whileStmt->condition);
+        compileExpr(whileStmt->condition);  //  Генерим условие
         text << "    test rax, rax\n";
-        text << "    jz " << endL << "\n";
-        compileStmt(whileStmt->body);
-        text << "    jmp " << startL << "\n";
+        text << "    jz " << endL << "\n";  
+        compileStmt(whileStmt->body);   //  Поведение
+        text << "    jmp " << startL << "\n";   //  И выход
         text << endL << ":\n";
         loopStack.pop_back();
         return;
@@ -2666,16 +2637,22 @@ void CodeGen::compileExpr(Expr* expr) {
         bool asFloat = num->isFloat;
         bool asFloat32 = false;
         if (num->resolvedType) {
-            if (num->resolvedType->kind == TypeKind::Float64) asFloat = true;
-            else if (num->resolvedType->kind == TypeKind::Float32) { asFloat = true; asFloat32 = true; }
+            if (num->resolvedType->kind == TypeKind::Float64) {
+                asFloat = true;
+            }
+            else if (num->resolvedType->kind == TypeKind::Float32) { 
+                asFloat = true; 
+                asFloat32 = true;
+            }
         }
         if (asFloat) {
             if (asFloat32) {
                 float value = (float)num->value;
                 uint32_t bits;
-                std::memcpy(&bits, &value, sizeof(bits));
+                std::memcpy(&bits, &value, sizeof(bits));   //  По битам записываем числа float
                 text << "    mov rax, " << bits << "\n";
-            } else {
+            } 
+            else {
                 double value = num->value;
                 uint64_t bits;
                 std::memcpy(&bits, &value, sizeof(bits));
@@ -2688,19 +2665,19 @@ void CodeGen::compileExpr(Expr* expr) {
     }
     if (auto* boolLit = dynamic_cast<Bool*>(expr)) {  //  Булев тип
         if (boolLit->value) {
-            text << "    mov rax, 1\n";
+            text << "    mov rax, 1\n"; //  True
         }
         else {
-            text << "    mov rax, 0\n";
+            text << "    mov rax, 0\n"; //  False
         }
         return;
     }
     if (auto* charLit = dynamic_cast<CharLiteral*>(expr)) {
-        text << "    mov rax, " << (int)(unsigned char)charLit->value << "\n";
+        text << "    mov rax, " << (int)(unsigned char)charLit->value << "\n";  //  Char тоже просто закидываем
         return;
     }
     if (dynamic_cast<NullLiteral*>(expr)) {
-        text << "    xor rax, rax\n";
+        text << "    xor rax, rax\n";   //  Для NULL просто обнуляем rax
         return;
     }
     if (auto* str = dynamic_cast<String*>(expr)) {  //  Строка
@@ -2716,7 +2693,7 @@ void CodeGen::compileExpr(Expr* expr) {
     }
    
     if (auto* arrayLit = dynamic_cast<ArrayLiteral*>(expr)) {
-        auto arrType = exprType(expr);
+        auto arrType = exprType(expr);  //  Тип массива
 
         if (!arrType) {
             codegenError(arrayLit->line, arrayLit->column, "array literal has no resolved type");
@@ -2725,18 +2702,15 @@ void CodeGen::compileExpr(Expr* expr) {
 
         // dynamic array literal: создаём header {ptr,len,cap} + heap-buffer
         if (arrType->kind == TypeKind::DynArray) {
-            int n = (int)arrayLit->elements.size();
-            auto elemType = arrType->elementType;
-            int elemSize = isCompositeMemoryType(elemType)
-                ? sizeOfType(elemType)
-                : codegenDynArrayElemSize(elemType);
-            if (elemSize <= 0) elemSize = 8;
+            int n = (int)arrayLit->elements.size(); //  Размер массива = кол-во элементов
+            auto elemType = arrType->elementType; //    Тип элемента
+            int elemSize = isCompositeMemoryType(elemType) ? sizeOfType(elemType) : codegenDynArrayElemSize(elemType);  //  Если элемент структура или класс 
 
             text << "    mov rdi, 24\n";
             emitAlignedCall("lang_alloc");
             text << "    push rax\n"; // header
 
-            if (n == 0) {
+            if (n == 0) {   //  Пустой массив, пустой и header
                 text << "    mov rbx, [rsp]\n";
                 text << "    mov qword [rbx], 0\n";
                 text << "    mov qword [rbx + 8], 0\n";
@@ -2745,10 +2719,10 @@ void CodeGen::compileExpr(Expr* expr) {
                 return;
             }
 
-            text << "    mov rdi, " << (n * elemSize) << "\n";
+            text << "    mov rdi, " << (n * elemSize) << "\n";  //  Буфер под элементы массива
             emitAlignedCall("lang_alloc");
 
-            text << "    mov rbx, [rsp]\n";
+            text << "    mov rbx, [rsp]\n"; //  Пишем header с учётом буфера памяти
             text << "    mov [rbx], rax\n";
             text << "    mov qword [rbx + 8], " << n << "\n";
             text << "    mov qword [rbx + 16], " << n << "\n";
@@ -2756,7 +2730,7 @@ void CodeGen::compileExpr(Expr* expr) {
             for (int i = 0; i < n; ++i) {
                 int off = i * elemSize;
 
-                if (isCompositeMemoryType(elemType)) {
+                if (isCompositeMemoryType(elemType)) {  //  Пользовательские типы
                     compileExpr(arrayLit->elements[i]);
                     text << "    mov rsi, rax\n";
                     text << "    mov rdi, [rsp]\n";
@@ -2764,7 +2738,7 @@ void CodeGen::compileExpr(Expr* expr) {
                     if (off != 0) text << "    add rdi, " << off << "\n";
                     emitCopy("rdi", "rsi", elemType);
                 }
-                else {
+                else {  //  Обычные типы
                     compileExprAs(arrayLit->elements[i], elemType);
                     text << "    mov rbx, [rsp]\n";
                     text << "    mov rbx, [rbx]\n";
@@ -2772,23 +2746,21 @@ void CodeGen::compileExpr(Expr* expr) {
                 }
             }
 
-            text << "    pop rax\n";
+            text << "    pop rax\n";    //  rax указывает на header массива
             return;
         }
 
-        // fixed array literal: создаём inline temporary
+        // статический массив
         if (arrType->kind == TypeKind::Array) {
             int size = sizeOfType(arrType);
             int elemSize = sizeOfType(arrType->elementType);
-            if (size <= 0) size = 8;
-            if (elemSize <= 0) elemSize = 8;
 
-            text << "    mov rdi, " << size << "\n";
-            emitAlignedCall("lang_alloc");
+            text << "    mov rdi, " << size << "\n";    //  Тоже самое что и с динамическим
+            emitAlignedCall("lang_alloc");  //  Только вместо header на 24 пишем реальный размер
             text << "    push rax\n";
 
             text << "    mov rdi, [rsp]\n";
-            emitDefaultAt("rdi", 0, arrType);
+            emitDefaultAt("rdi", 0, arrType);   //  И заполняем все значения дэфолтами если они не прописаны
 
             for (size_t i = 0; i < arrayLit->elements.size(); ++i) {
                 int off = (int)i * elemSize;
@@ -2816,45 +2788,45 @@ void CodeGen::compileExpr(Expr* expr) {
     }
    
     if (auto* sl = dynamic_cast<StructLiteral*>(expr)) {
-        auto structType = exprType(expr);
+        auto structType = exprType(expr);   //  Тип и размер
         int size = sizeOfType(structType);
-        if (size <= 0) size = 8;
 
-        text << "    mov rdi, " << size << "\n";
-        emitAlignedCall("lang_alloc");
+        text << "    mov rdi, " << size << "\n";    //  Выделяем память под структуру
+        emitAlignedCall("lang_alloc");  
         text << "    push rax\n";
 
-        std::string structName = structType ? structType->name : sl->name;
-        auto& layout = structLayouts[structName];
-        auto& types = structFieldTypes[structName];
+        std::string structName = structType ? structType->name : sl->name;  //  Берём имя
+        auto& layout = structLayouts[structName];   //  Смещения
+        auto& types = structFieldTypes[structName]; //  И типы
 
         // Сначала копируем текущие runtime defaults, затем накладываем явные поля литерала.
         for (const auto& name : structFieldOrder[structName]) {
             int off = 0;
-            if (layout.count(name)) off = layout[name];
+            if (layout.count(name)) off = layout[name]; //  Берём смещение
 
             std::shared_ptr<Type> fieldType = nullptr;
-            if (types.count(name)) fieldType = types[name];
+            if (types.count(name)) fieldType = types[name]; //  И тип поля
 
-            text << "    mov rdi, [rsp]\n";
-            if (off != 0) text << "    add rdi, " << off << "\n";
-            text << "    lea rsi, [rel __default_" << mangleQualifiedName(structName) << "_" << name << "]\n";
-            emitCopy("rdi", "rsi", fieldType);
+            text << "    mov rdi, [rsp]\n"; 
+            if (off != 0) text << "    add rdi, " << off << "\n";   //  Берём адрес поля по смещению
+            text << "    lea rsi, [rel __default_" << mangleQualifiedName(structName) << "_" << name << "]\n";  //  Проставляем default значения полей
+            emitCopy("rdi", "rsi", fieldType);  //  И копируем их
         }
 
+        //  Проставляем явно заданные значения
         for (auto& fi : sl->fields) {
             int off = 0;
-            if (layout.count(fi.name)) off = layout[fi.name];
+            if (layout.count(fi.name)) off = layout[fi.name];   //  Всё тоже самое
 
             std::shared_ptr<Type> fieldType = nullptr;
             if (types.count(fi.name)) fieldType = types[fi.name];
 
-            if (isCompositeMemoryType(fieldType)) {
+            if (isCompositeMemoryType(fieldType)) { //  Только теперь явно смотрим на значение
                 compileExpr(fi.value);          // rax = src address
                 text << "    mov rsi, rax\n";
                 text << "    mov rdi, [rsp]\n";
                 if (off != 0) text << "    add rdi, " << off << "\n";
-                emitCopy("rdi", "rsi", fieldType);
+                emitCopy("rdi", "rsi", fieldType);  //  И его уже копируем
             }
             else {
                 compileExprAs(fi.value, fieldType);
@@ -2863,7 +2835,7 @@ void CodeGen::compileExpr(Expr* expr) {
             }
         }
 
-        text << "    pop rax\n";
+        text << "    pop rax\n";    //  В rax указатель на структуру
         return;
     }
     
@@ -2903,15 +2875,15 @@ void CodeGen::compileExpr(Expr* expr) {
         return;
     }
     if (auto* id = dynamic_cast<Identifier*>(expr)) {
-        const LocalVar* lv = findLocal(id->resolvedSym);
+        const LocalVar* lv = findLocal(id->resolvedSym);    //  Ищем в таблице переменную
         if (lv) {
             emitAddress(id);
-            if (!isCompositeMemoryType(lv->type)) {
+            if (!isCompositeMemoryType(lv->type)) { //  Эмитим
                 emitLoad("[rax]", lv->type);
             }
             return;
         }
-        if (isGlobal(id->resolvedSym)) {
+        if (isGlobal(id->resolvedSym)) {    //  Глобальные переменные
             auto globalType = id->resolvedSym && id->resolvedSym->type ? id->resolvedSym->type : exprType(id);
             if (id->resolvedSym) {
                 auto it = globalsBySymbol.find(id->resolvedSym);
@@ -2925,22 +2897,29 @@ void CodeGen::compileExpr(Expr* expr) {
             }
             return;
         }
-        //  Сокращение: бареИмяСтруктуры = пустой struct-литерал `Struct {}`.
         //  Аллоцируем объект и заливаем default-значения из слотов (поля без default остаются нулями от lang_alloc).
         if ((!id->resolvedSym || id->resolvedSym->kind == SymbolKind::Struct) && structDecls.count(id->name)) {
             int size;
-            if (structSizes.count(id->name)) size = structSizes[id->name];
-            else                              size = (int)structDecls[id->name]->fields.size() * 8;
+            if (structSizes.count(id->name)) {
+                size = structSizes[id->name];
+            }
+            else {
+                size = (int)structDecls[id->name]->fields.size() * 8;
+            }
+
             text << "    mov rdi, " << size << "\n";
             emitAlignedCall("lang_alloc");
             text << "    push rax\n";
+
             auto& layout = structLayouts[id->name];
             auto& types = structFieldTypes[id->name];
             for (auto& field : structDecls[id->name]->fields) {
                 int off = 0;
                 if (layout.count(field.name)) off = layout[field.name];
+
                 std::shared_ptr<Type> fieldType = nullptr;
                 if (types.count(field.name)) fieldType = types[field.name];
+
                 text << "    mov rdi, [rsp]\n";
                 if (off != 0) text << "    add rdi, " << off << "\n";
                 text << "    lea rsi, [rel __default_" << mangleQualifiedName(id->name) << "_" << field.name << "]\n";
@@ -2969,17 +2948,17 @@ void CodeGen::compileExpr(Expr* expr) {
         return;                                      //  Семантик уже проверил существование
     }
     if (auto* unary = dynamic_cast<Unary*>(expr)) {
-        if (unary->op == Operand::UnaryPlus) {
+        if (unary->op == Operand::UnaryPlus) {      //  Унарный плюс - ничего не делаем
             compileExpr(unary->operand);
             return;
         }
-        if (unary->op == Operand::UnaryMinus) {
-            compileExpr(unary->operand);
+        if (unary->op == Operand::UnaryMinus) {     //  Унарный минус - меняем значение
+            compileExpr(unary->operand);    //  Смотрим операнд 
             std::shared_ptr<Type> t = nullptr;
             if (unary->operand) t = exprType(unary->operand);
             bool isFloat = t && (t->kind == TypeKind::Float32 || t->kind == TypeKind::Float64);
-            if (isFloat) {
-                //  Для float — инвертируем только знаковый бит, не все биты
+           
+            if (isFloat) {    //  Для float — инвертируем только знаковый бит, не все биты
                 if (t->kind == TypeKind::Float32) {
                     text << "    mov ebx, 0x80000000\n";
                 }
@@ -2989,23 +2968,23 @@ void CodeGen::compileExpr(Expr* expr) {
                 text << "    xor rax, rbx\n";
             }
             else {
-                text << "    neg rax\n";
+                text << "    neg rax\n";    //  Другие числа инвертируем полностью
             }
             return;
         }
         if (unary->op == Operand::Increment || unary->op == Operand::Decrement) {
-            //  ++/-- работают с любым scalar lvalue: локалкой, глобалкой,
-            //  полем или элементом массива. Адрес вычисляется один раз, чтобы
-            //  индексные выражения с побочными эффектами не выполнялись дважды.
+            //  ++/-- работают с любым lvalue скаляром: локалкой, глобалкой, полем или элементом массива. 
+            //  Адрес вычисляется один раз, чтобы индексные выражения с побочными эффектами не выполнялись дважды.
             auto type = exprType(unary->operand);
             emitAddress(unary->operand);
             text << "    push rax\n";
             emitLoad("[rax]", type);
+            
             if (unary->op == Operand::Increment) {
-                text << "    add rax, 1\n";
+                text << "    add rax, 1\n"; //  ++
             }
             else {
-                text << "    sub rax, 1\n";
+                text << "    sub rax, 1\n"; //  --
             }
             text << "    mov rbx, [rsp]\n";
             emitStore("[rbx]", type);
@@ -3020,12 +2999,11 @@ void CodeGen::compileExpr(Expr* expr) {
         return;
     }
     if (auto* bin = dynamic_cast<Binary*>(expr)) {
-        //  Short-circuit для && и || — нельзя вычислять оба операнда заранее
         if (bin->op == Operand::And || bin->op == Operand::Or) {
             bool isAnd = (bin->op == Operand::And);
             std::string shortL;
             if (isAnd) {
-                shortL = newLabel("and_false");
+                shortL = newLabel("and_false"); //  Метки для И / ИЛИ
             }
             else {
                 shortL = newLabel("or_true");
@@ -3033,25 +3011,28 @@ void CodeGen::compileExpr(Expr* expr) {
             std::string endL = newLabel("logic_end");
             const char* jmpCC;
             if (isAnd) {
-                jmpCC = "jz";
+                jmpCC = "jz";   //  jump в зависимости от операции
             }
             else {
                 jmpCC = "jnz";
             }
 
+            //  Сравниваем левый и правый операнды
             compileExpr(bin->left);
-            text << "    test rax, rax\n";
-            text << "    " << jmpCC << " " << shortL << "\n";
+            text << "    test rax, rax\n";  //  Ленивое вычисление, если первое true и у нас операнд ИЛИ
+            text << "    " << jmpCC << " " << shortL << "\n";   //  То происходит прыжок и второй операнд проверять нет смысла
             compileExpr(bin->right);
-            text << "    test rax, rax\n";
+            text << "    test rax, rax\n";  //  Иначе проверяем значение второго операнда
             text << "    " << jmpCC << " " << shortL << "\n";
-            if (isAnd) {
+            
+            if (isAnd) {    //  Итоговый результат сравнения
                 text << "    mov rax, 1\n";
             }
             else {
                 text << "    xor rax, rax\n";
             }
-            text << "    jmp " << endL << "\n";
+
+            text << "    jmp " << endL << "\n"; //  И выход из операции
             text << shortL << ":\n";
             if (isAnd) {
                 text << "    xor rax, rax\n";
@@ -3067,33 +3048,44 @@ void CodeGen::compileExpr(Expr* expr) {
         //  Операнд-char превращаем в указатель на временную 2-байтовую строку "{c,\0}" на стеке.
         auto leftType = exprType(bin->left);
         auto rightType = exprType(bin->right);
+
         bool leftIsStr  = leftType  && leftType->kind  == TypeKind::String;
         bool rightIsStr = rightType && rightType->kind == TypeKind::String;
+
         bool leftIsChar  = leftType  && leftType->kind  == TypeKind::Char;
         bool rightIsChar = rightType && rightType->kind == TypeKind::Char;
-        bool isStringConcat = bin->op == Operand::Add
-            && (leftIsStr  || leftIsChar)
-            && (rightIsStr || rightIsChar)
-            && (leftIsStr  || rightIsStr);
+
+        //  Для строк и чаров определено только сложение
+        bool isStringConcat = bin->op == Operand::Add && (leftIsStr  || leftIsChar) && (rightIsStr || rightIsChar);
+
         if (isStringConcat) {
-            //  Для каждого операнда-char пушим qword с младшим байтом = символ, остальные = 0.
-            //  Получаем валидный C-string из 2 байт: {c, '\0'} лежит по адресу rsp на момент вызова.
-            //  Для string просто pushим указатель.
             compileExpr(bin->left);
             if (leftIsChar) {
                 text << "    and rax, 0xFF\n";                   //  обнулили верхние байты, в низком — символ
             }
             text << "    push rax\n";                            //  [rsp] = left (либо ptr, либо qword-"{c,\\0,...}")
+            
             compileExpr(bin->right);
             if (rightIsChar) {
                 text << "    and rax, 0xFF\n";
             }
             text << "    push rax\n";                            //  [rsp] = right
-            if (rightIsChar) text << "    mov rsi, rsp\n";       //  указатель на наш qword как C-строку
-            else             text << "    mov rsi, [rsp]\n";     //  указатель-строка
-            if (leftIsChar)  text << "    lea rdi, [rsp+8]\n";   //  адрес qword'а с символом на стеке
-            else             text << "    mov rdi, [rsp+8]\n";
-            emitAlignedCall("lang_strcat");
+            
+            if (rightIsChar) {
+                text << "    mov rsi, rsp\n";       //  указатель на наш qword как C-строку
+            }
+            else {
+                text << "    mov rsi, [rsp]\n";     //  указатель-строка
+            }
+
+            if (leftIsChar) {
+                text << "    lea rdi, [rsp+8]\n";   //  адрес qword'а с символом на стеке
+            }
+            else {
+                text << "    mov rdi, [rsp+8]\n";
+            }
+
+            emitAlignedCall("lang_strcat"); //  Конкатим строки
             text << "    add rsp, 16\n";
             return;
         }
@@ -3113,27 +3105,26 @@ void CodeGen::compileExpr(Expr* expr) {
 
         //  Float-арифметика/сравнения: оба операнда приводим к общему float-типу.
         auto binaryResultType = exprType(bin);
-        auto numericType = isCodegenFloatType(binaryResultType)
-            ? binaryResultType
-            : codegenCommonNumericType(leftType, rightType);
+        auto numericType = isCodegenFloatType(binaryResultType) ? binaryResultType : codegenCommonNumericType(leftType, rightType);
         bool isFloat = isCodegenFloatType(numericType);
-        if (isFloat && bin->op != Operand::Mod) {
+
+        if (isFloat && bin->op != Operand::Mod) {   //  Для float % не определён
             compileExprAs(bin->left, numericType);
             text << "    push rax\n";
             compileExprAs(bin->right, numericType);
 
-            if (numericType->kind == TypeKind::Float32) {
+            if (numericType->kind == TypeKind::Float32) {   //  float32 храним через eax, т.к. нам достаточно только левой половины rax
                 text << "    movd xmm1, eax\n";
                 text << "    pop rax\n";
                 text << "    movd xmm0, eax\n";
             }
             else {
-                text << "    movq xmm1, rax\n";
+                text << "    movq xmm1, rax\n";     //  float64 храним через rax, тут уже обе части нужны
                 text << "    pop rax\n";
                 text << "    movq xmm0, rax\n";
             }
 
-            if (numericType->kind == TypeKind::Float32) {
+            if (numericType->kind == TypeKind::Float32) {   //  addss и ucomiss для float32
                 switch (bin->op) {
                     case Operand::Add: text << "    addss xmm0, xmm1\n"; break;
                     case Operand::Sub: text << "    subss xmm0, xmm1\n"; break;
@@ -3155,7 +3146,7 @@ void CodeGen::compileExpr(Expr* expr) {
                 text << "    movd eax, xmm0\n";
             }
             else {
-                switch (bin->op) {
+                switch (bin->op) {  //  addsd и ucomisd для обычного float 
                     case Operand::Add: text << "    addsd xmm0, xmm1\n"; break;
                     case Operand::Sub: text << "    subsd xmm0, xmm1\n"; break;
                     case Operand::Mul: text << "    mulsd xmm0, xmm1\n"; break;
@@ -3203,8 +3194,12 @@ void CodeGen::compileExpr(Expr* expr) {
             case Operand::Add: text << "    add rax, rbx\n"; break;
             case Operand::Sub: text << "    sub rax, rbx\n"; break;
             case Operand::Mul:
-                if (isUnsigned) text << "    mul rbx\n";           //  rdx:rax = rax * rbx
-                else            text << "    imul rax, rbx\n";
+                if (isUnsigned) {
+                    text << "    mul rbx\n";           
+                }
+                else {
+                    text << "    imul rax, rbx\n";
+                }
                 break;
             case Operand::Pow: {
                 std::string nonNegativeLabel = newLabel("pow_nonneg");
@@ -3237,8 +3232,12 @@ void CodeGen::compileExpr(Expr* expr) {
                 text << "    mov rsi, " << bin->line << "\n";
                 emitAlignedCall("lang_panic");
                 text << okLabel << ":\n";
-                if (isUnsigned) text << "    xor rdx, rdx\n    div rbx\n";
-                else            text << "    cqo\n    idiv rbx\n";
+                if (isUnsigned) {
+                    text << "    xor rdx, rdx\n    div rbx\n";
+                }
+                else {
+                    text << "    cqo\n    idiv rbx\n";
+                }
                 break;
             }
             case Operand::Mod: {
@@ -3249,8 +3248,12 @@ void CodeGen::compileExpr(Expr* expr) {
                 text << "    mov rsi, " << bin->line << "\n";
                 emitAlignedCall("lang_panic");
                 text << okLabel << ":\n";
-                if (isUnsigned) text << "    xor rdx, rdx\n    div rbx\n";
-                else            text << "    cqo\n    idiv rbx\n";
+                if (isUnsigned) {
+                    text << "    xor rdx, rdx\n    div rbx\n";
+                }
+                else {
+                    text << "    cqo\n    idiv rbx\n";
+                }
                 text << "    mov rax, rdx\n";
                 break;
             }
@@ -3291,11 +3294,10 @@ void CodeGen::compileExpr(Expr* expr) {
         }
         return;
     }
-    if (auto* fc = dynamic_cast<FuncCall*>(expr)) {
+    if (auto* fc = dynamic_cast<FuncCall*>(expr)) { //  Вызов функции
         auto funcInfo = callFuncInfo(fc);
-        //  Метод экземпляра: obj.method(args) — self передаётся в rdi
        
-        if (auto* fa = dynamic_cast<FieldAccess*>(fc->callee)) {
+        if (auto* fa = dynamic_cast<FieldAccess*>(fc->callee)) {    //  Вызов метода
             std::shared_ptr<Type> objType;
             if (fa->object) {
                 objType = exprType(fa->object);
@@ -3306,14 +3308,14 @@ void CodeGen::compileExpr(Expr* expr) {
                 return;
             }
 
-            auto retType = fc->resolvedType ? fc->resolvedType : callReturnType(fc);
+            auto retType = fc->resolvedType ? fc->resolvedType : callReturnType(fc);    //  Тип возврата
             bool returnsComposite = isCompositeMemoryType(retType);
 
             int expectedMethodStackArgs = 0;
             {
                 int scanIntIdx = 0;
                 int scanXmmIdx = 0;
-                size_t maxIntRegs = returnsComposite ? 4 : 5;
+                size_t maxIntRegs = returnsComposite ? 4 : 5;   //  Композитный метод занимает 1 регистр параметров под возврат
 
                 for (size_t i = 0; i < fc->args.size(); ++i) {
                     std::shared_ptr<Type> argType = nullptr;
@@ -3325,6 +3327,7 @@ void CodeGen::compileExpr(Expr* expr) {
                     }
 
                     bool isFloat = argType && (argType->kind == TypeKind::Float32 || argType->kind == TypeKind::Float64);
+                    
                     if (isFloat && scanXmmIdx < 8) {
                         scanXmmIdx++;
                     }
@@ -3366,7 +3369,11 @@ void CodeGen::compileExpr(Expr* expr) {
 
             if (returnsComposite) {
                 int retSize = sizeOfType(retType);
-                if (retSize <= 0) retSize = 8;
+                if (retSize <= 0) {
+                    std::string methodName = fa->field;
+                    codegenError(fc->line, fc->column, "method '" + methodName + "' returns struct with unknown layout");
+                    return;
+                }
                 text << "    mov rdi, " << retSize << "\n";
                 emitAlignedCall("lang_alloc");
                 text << "    push rax\n";
@@ -3439,6 +3446,147 @@ void CodeGen::compileExpr(Expr* expr) {
             }
 
             return;
+        }
+
+        if (auto* implicitSelfCallee = dynamic_cast<Identifier*>(fc->callee)) {
+            if (fc->resolvedMethod && currentClass && hasSelfLocal) {
+                auto retType = fc->resolvedType ? fc->resolvedType : callReturnType(fc);
+                bool returnsComposite = isCompositeMemoryType(retType);
+
+                int expectedMethodStackArgs = 0;
+                {
+                    int scanIntIdx = 0;
+                    int scanXmmIdx = 0;
+                    size_t maxIntRegs = returnsComposite ? 4 : 5;
+
+                    for (size_t i = 0; i < fc->args.size(); ++i) {
+                        std::shared_ptr<Type> argType = nullptr;
+                        if (i < fc->resolvedMethod->params.size()) {
+                            argType = fc->resolvedMethod->params[i].type;
+                        }
+                        else {
+                            argType = exprType(fc->args[i]);
+                        }
+
+                        bool isFloat = argType && (argType->kind == TypeKind::Float32 || argType->kind == TypeKind::Float64);
+
+                        if (isFloat && scanXmmIdx < 8) {
+                            scanXmmIdx++;
+                        }
+                        else if ((size_t)scanIntIdx < maxIntRegs) {
+                            scanIntIdx++;
+                        }
+                        else {
+                            expectedMethodStackArgs++;
+                        }
+                    }
+                }
+
+                int methodStackPadding = (expectedMethodStackArgs > 0 && expectedMethodStackArgs % 2 == 0) ? 8 : 0;
+
+                text << "    mov rax, [rbp" << selfLocal.offset << "]\n";
+                emitNullCheck("rax", fc->line);
+                if (methodStackPadding != 0) {
+                    text << "    sub rsp, " << methodStackPadding << "\n";
+                }
+                text << "    push rax\n"; // self
+
+                for (int i = (int)fc->args.size() - 1; i >= 0; --i) {
+                    std::shared_ptr<Type> expected = nullptr;
+
+                    if (i < (int)fc->resolvedMethod->params.size()) {
+                        expected = fc->resolvedMethod->params[i].type;
+                    }
+
+                    if (expected) {
+                        compileExprAs(fc->args[i], expected);
+                    }
+                    else {
+                        compileExpr(fc->args[i]);
+                    }
+
+                    text << "    push rax\n";
+                }
+
+                if (returnsComposite) {
+                    int retSize = sizeOfType(retType);
+                    if (retSize <= 0) {
+                        codegenError(fc->line, fc->column, "method '" + implicitSelfCallee->name + "' returns struct with unknown layout");
+                        return;
+                    }
+                    text << "    mov rdi, " << retSize << "\n";
+                    emitAlignedCall("lang_alloc");
+                    text << "    push rax\n";
+                }
+
+                static const char* methodArgRegs[5] = {"rsi", "rdx", "rcx", "r8", "r9"};
+                static const char* sretMethodArgRegs[4] = {"rdx", "rcx", "r8", "r9"};
+
+                if (returnsComposite) {
+                    text << "    pop rdi\n";
+                    text << "    mov rsi, [rsp + " << (fc->args.size() * 8) << "]\n";
+                }
+                else {
+                    text << "    mov rdi, [rsp + " << (fc->args.size() * 8) << "]\n";
+                }
+
+                int intIdx = 0;
+                int xmmIdx = 0;
+                size_t qwordsConsumed = 0;
+                size_t maxIntRegs = returnsComposite ? 4 : 5;
+
+                for (size_t i = 0; i < fc->args.size(); ++i) {
+                    std::shared_ptr<Type> argType = nullptr;
+                    if (i < fc->resolvedMethod->params.size()) {
+                        argType = fc->resolvedMethod->params[i].type;
+                    }
+                    else {
+                        argType = exprType(fc->args[i]);
+                    }
+
+                    bool isFloat = argType && (argType->kind == TypeKind::Float32 || argType->kind == TypeKind::Float64);
+                    if (isFloat && xmmIdx < 8) {
+                        if (argType->kind == TypeKind::Float32) {
+                            text << "    movd xmm" << xmmIdx++ << ", dword [rsp]\n";
+                        }
+                        else {
+                            text << "    movq xmm" << xmmIdx++ << ", [rsp]\n";
+                        }
+                        text << "    add rsp, 8\n";
+                        qwordsConsumed++;
+                        continue;
+                    }
+
+                    if ((size_t)intIdx < maxIntRegs) {
+                        if (returnsComposite) {
+                            text << "    pop " << sretMethodArgRegs[intIdx++] << "\n";
+                        }
+                        else {
+                            text << "    pop " << methodArgRegs[intIdx++] << "\n";
+                        }
+                        qwordsConsumed++;
+                    }
+                }
+
+                size_t stackArgs = fc->args.size() - qwordsConsumed;
+                if (stackArgs == 0) {
+                    text << "    add rsp, 8\n";
+                }
+
+                std::string methodLabel = mangleQualifiedName(currentClass->name) + "_" + implicitSelfCallee->name;
+                if (stackArgs == 0) {
+                    emitAlignedCall(methodLabel);
+                }
+                else {
+                    text << "    call " << methodLabel << "\n";
+                }
+
+                if (stackArgs > 0) {
+                    text << "    add rsp, " << (stackArgs * 8 + 8 + methodStackPadding) << "\n";
+                }
+
+                return;
+            }
         }
 
         std::string callName;
@@ -3817,7 +3965,10 @@ void CodeGen::compileExpr(Expr* expr) {
 
         if (returnsComposite) {
             int retSize = sizeOfType(retType);
-            if (retSize <= 0) retSize = 8;
+            if (retSize <= 0) {
+                codegenError(fc->line, fc->column, "function call returns struct with unknown layout");
+                return;
+            }
             text << "    mov rdi, " << retSize << "\n";
             emitAlignedCall("lang_alloc");
             text << "    push rax\n";

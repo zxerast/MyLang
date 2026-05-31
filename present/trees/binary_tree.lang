@@ -1,0 +1,237 @@
+const int END = -1;      
+
+export class Tree {
+    struct Node {              
+        int val;               
+        int left = END;
+        int right = END;
+    }
+
+    struct IntTree {
+        int root;              // Индекс корня дерева
+        int size;              // Логический размер конкретного дерева
+    }
+
+    Node[] TREE = [];          // Здесь лежат все узлы деревьев. Переходы идут по индексам left/right.
+
+    int new_node(int val) {    // Создание узла
+        Node node;
+        node.val = val;
+        push(node, TREE);
+        return len(TREE) - 1;
+    }
+
+    IntTree new_tree() {       // Создание дерева
+        IntTree tree;
+        tree.root = END;
+        tree.size = 0;
+        return tree;
+    }
+
+    IntTree insert(IntTree tree, int val) {  // Вставка в бинарное дерево поиска
+        if (tree.root == END) {
+            tree.root = new_node(val);
+            tree.size++;
+            return tree;
+        }
+
+        int cur = tree.root;
+        while (true) {
+            if (val < TREE[cur].val) {
+                if (TREE[cur].left == END) {
+                    int i = new_node(val);
+                    TREE[cur].left = i;
+                    tree.size++;
+                    return tree;
+                }
+
+                cur = TREE[cur].left;
+            } 
+            else if (val > TREE[cur].val) {
+                if (TREE[cur].right == END) {
+                    int i = new_node(val);
+                    TREE[cur].right = i;
+                    tree.size++;
+                    return tree;
+                }
+
+                cur = TREE[cur].right;
+            } 
+            else {
+                return tree;                   // Дубликаты игнорируем
+            }
+        }
+
+        return tree;
+    }
+
+    bool contains(IntTree tree, int val) {    // Поиск значения
+        int cur = tree.root;
+        while (cur != END) {
+            if (val == TREE[cur].val) {
+                return true;
+            } 
+            else if (val < TREE[cur].val) {
+                cur = TREE[cur].left;
+            } 
+            else {
+                cur = TREE[cur].right;
+            }
+        }
+
+        return false;
+    }
+
+    void min_value(IntTree tree) {     // Минимум в дереве
+        int result = 0;
+
+        if (tree.root == END) {
+            print("min is:", result);
+            return;
+        }
+
+        int cur = tree.root;
+        while (TREE[cur].left != END) {
+            cur = TREE[cur].left;
+        }
+
+        print("min is:", TREE[cur].val);
+    }
+
+    void max_value(IntTree tree) {     // Максимум в дереве
+        int result = 0;
+
+        if (tree.root == END) {
+            print("max is:", result);
+            return;
+        }
+
+        int cur = tree.root;
+        while (TREE[cur].right != END) {
+            cur = TREE[cur].right;
+        }
+
+        print("max is:", TREE[cur].val);
+    }
+    
+
+    IntTree delete_value(IntTree tree, int val) {   // Удаление значения из дерева
+        int parent = END;
+        int cur = tree.root;
+
+        while (cur != END && TREE[cur].val != val) {
+            parent = cur;
+
+            if (val < TREE[cur].val) {
+                cur = TREE[cur].left;
+            } 
+            else {
+                cur = TREE[cur].right;
+            }
+        }
+
+        if (cur == END) {
+            return tree;
+        }
+
+        if (TREE[cur].left != END && TREE[cur].right != END) {
+            int next_parent = cur;
+            int next = TREE[cur].right;
+
+            while (TREE[next].left != END) {
+                next_parent = next;
+                next = TREE[next].left;
+            }
+
+            TREE[cur].val = TREE[next].val;      
+            parent = next_parent;
+            cur = next;
+        }
+
+        int child = TREE[cur].left;
+        if (child == END) {
+            child = TREE[cur].right;
+        }
+
+        if (parent == END) {
+            tree.root = child;
+        } 
+        else if (TREE[parent].left == cur) {
+            TREE[parent].left = child;
+        } 
+        else {
+            TREE[parent].right = child;
+        }
+
+        TREE[cur].left = END;
+        TREE[cur].right = END;
+        tree.size--;
+
+        if (tree.size == 0) {
+            tree.root = END;
+        }
+
+        return tree;
+    }
+
+    int height_from(int node) {            // Высота поддерева
+        if (node == END) {
+            return 0;
+        }
+
+        int left_height = height_from(TREE[node].left);
+        int right_height = height_from(TREE[node].right);
+
+        if (left_height > right_height) {
+            return left_height + 1;
+        }
+
+        return right_height + 1;
+    }
+
+    int height(IntTree tree) {
+        return height_from(tree.root);
+    }
+
+    void print_in_order_from(int node) {   // Левый потомок -> корень -> правый потомок
+        if (node == END) {
+            return;
+        }
+
+        print_in_order_from(TREE[node].left);
+        print(TREE[node].val);
+        print_in_order_from(TREE[node].right);
+    }
+
+    void print_in_order(IntTree tree) {
+        print_in_order_from(tree.root);
+    }
+
+    void print_pre_order_from(int node) {  // Корень -> левый потомок -> правый потомок
+        if (node == END) {
+            return;
+        }
+
+        print(TREE[node].val);
+        print_pre_order_from(TREE[node].left);
+        print_pre_order_from(TREE[node].right);
+    }
+
+    void print_pre_order(IntTree tree) {
+        print_pre_order_from(tree.root);
+    }
+
+    void print_post_order_from(int node) { // Левый потомок -> правый потомок -> корень
+        if (node == END) {
+            return;
+        }
+
+        print_post_order_from(TREE[node].left);
+        print_post_order_from(TREE[node].right);
+        print(TREE[node].val);
+    }
+
+    void print_post_order(IntTree tree) {
+        print_post_order_from(tree.root);
+    }
+}

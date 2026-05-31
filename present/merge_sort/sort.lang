@@ -1,0 +1,58 @@
+int[] merge(int[] arr, int start, int middle, int end) {   // Копируем левую и правую половины во временные массивы
+    int[] left  = [];
+    int[] right = [];
+
+    int i = start;
+    while (i <= middle) {   
+        push(arr[i], left);
+        i++;
+    }
+
+    int j = middle + 1;
+    while (j <= end) {
+        push(arr[j], right);
+        j++;
+    }
+
+    int li = 0;
+    int ri = 0;
+    int k  = start;
+
+    while (li < len(left) && ri < len(right)) {
+        if (left[li] <= right[ri]) {
+            arr[k] = left[li];
+            li++;
+        } else {
+            arr[k] = right[ri];
+            ri++;
+        }
+        k++;
+    }
+    while (li < len(left)) {
+        arr[k] = left[li];
+        li++;
+        k++;
+    }
+    while (ri < len(right)) {
+        arr[k] = right[ri];
+        ri++;
+        k++;
+    }
+    return arr;
+}
+
+int[] merge_sort_range(int[] arr, int start, int end) {
+    if (start >= end) { 
+        return arr; 
+    }
+    int middle = start + (end - start) / 2;
+    arr = merge_sort_range(arr, start, middle);
+    arr = merge_sort_range(arr, middle + 1, end);
+    arr = merge(arr, start, middle, end);
+
+    return arr;
+}
+
+export int[] merge_sort(int[] arr) {
+    return merge_sort_range(arr, 0, len(arr) - 1);
+}

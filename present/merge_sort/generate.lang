@@ -1,0 +1,97 @@
+import "sort.lang"
+import <stdio.h>
+import <stdlib.h>
+import <time.h>
+
+const string INPUT_FILE  = "present/merge_sort/input.txt";
+const string OUTPUT_FILE = "present/merge_sort/output.txt";
+
+void generate_input_file(string path, int count) {  //  Генерируем входной файл
+    uint64 file = fopen(path, "w");     //  Сырой указатель в виде числа
+
+    if (file == 0) {
+        panic("cannot open input file for writing");
+    }
+
+    srand(cast<uint>(time(0)));   //  Заводим генератор случайных чисел (т.к. неявно int к uint не привести используем каст)
+
+    int i;
+    while (i < count) {
+        int value = rand() % 1000;      //  Пишем в файл
+        fprintf(file, "%d ", value);
+        i++;
+    }
+
+    fclose(file);
+}
+
+int[] read_from_file(string path) {
+    uint64 file = fopen(path, "r");     //  Открываем файл для чтения
+
+    if (file == 0) {
+        panic("cannot open input file for reading");
+    }
+
+    int[] result = [];
+
+    int current;
+    bool has_number;
+
+    int ch = fgetc(file);   //  Получаем код цифры с клавиатуры
+
+    while (ch != -1) {
+        if (ch >= 48 && ch <= 57) { 
+            current = current * 10 + (ch - 48);    //   Конвертируем его в число
+            has_number = true;
+        } 
+        else {
+            if (has_number) {
+                push(current, result);      //  Собранное число пушим в результат
+                current = 0;
+                has_number = false;
+            }
+        }
+
+        ch = fgetc(file);
+    }
+
+    if (has_number) {
+        push(current, result);  //  Оставшееся число не забываем
+    }
+
+    fclose(file);
+
+    return result;
+}
+
+void write_to_file(string path, int[] arr) {
+    uint64 file = fopen(path, "w");
+
+    if (file == 0) {
+        panic("cannot open output file for writing");
+    }
+
+    int i;
+    while (i < len(arr)) {
+        fprintf(file, "%d", arr[i]);
+
+        if (i + 1 < len(arr)) {
+            fprintf(file, " ");
+        }
+
+        i++;
+    }
+
+    fprintf(file, "\n");
+    fclose(file);
+}
+
+int main() {
+    generate_input_file(INPUT_FILE, input());
+
+    int[] arr = read_from_file(INPUT_FILE);
+    arr = merge_sort(arr);
+    write_to_file(OUTPUT_FILE, arr);
+
+    return 0;
+}

@@ -1367,13 +1367,13 @@ std::shared_ptr<Type> SemanticAnalyzer::analyzeExpr(Expr* expr, std::shared_ptr<
 
         switch (bin->op) {  //  Операнд
             case Operand::Add:
-                if (leftType->kind == TypeKind::String && rightType->kind == TypeKind::String) {
+                if (
+                    (leftType->kind == TypeKind::String && rightType->kind == TypeKind::String) ||
+                    (leftType->kind == TypeKind::String && rightType->kind == TypeKind::Char) || 
+                    (leftType->kind == TypeKind::Char && rightType->kind == TypeKind::String) ||
+                    (leftType->kind == TypeKind::Char && rightType->kind == TypeKind::Char)) {
+
                     expr->resolvedType = makeType(TypeKind::String);  //  "Hello" + "World" -> string
-                    return expr->resolvedType;
-                }
-                //  string + char  /  char + string -> string (символ склеивается как 1-байтовая строка)
-                if ((leftType->kind == TypeKind::String && rightType->kind == TypeKind::Char) || (leftType->kind == TypeKind::Char && rightType->kind == TypeKind::String)) {
-                    expr->resolvedType = makeType(TypeKind::String);
                     return expr->resolvedType;
                 }
                 [[fallthrough]];  //  иначе — обычная арифметика
@@ -2523,6 +2523,16 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
             checkDuplicateMethods(clas->methods, decl->line, decl->column, clas->name);
             checkDuplicateNestedStructs(clas->structs, decl->line, decl->column, clas->name);
 
+            for (auto* nested : clas->structs) {
+                if (!nested) continue;
+                auto nestedInfo = std::make_shared<StructInfo>();
+                nestedInfo->name = qualifiedName + "::" + nested->name;
+                sym->classInfo->nestedStructs[nested->name] = nestedInfo;
+            }
+
+            auto prevClass = currentClass;
+            currentClass = sym->classInfo;
+
             for (auto& field : clas->fields) {  //  Поля класса
                 auto fieldType = resolveDeclaredType(field.isAuto, field.isConst, field.typeName, field.defaultValue, decl->line, decl->column, "field '" + field.name + "' of class '" + clas->name + "'", DeclContext::Field);
                 field.resolvedType = fieldType;
@@ -2533,19 +2543,14 @@ void SemanticAnalyzer::collectTopLevel(const std::vector<Stmt*>& decls) {
             //  class A { struct S {...} S makeS() {...} }.
             for (auto* nested : clas->structs) {
                 if (!nested) continue;
-                auto nestedInfo = std::make_shared<StructInfo>();
-                nestedInfo->name = qualifiedName + "::" + nested->name;
+                auto nestedInfo = sym->classInfo->nestedStructs[nested->name];
                 checkDuplicateFields(nested->fields, nested->line, nested->column, "nested struct '" + qualifiedName + "::" + nested->name + "'");
                 for (auto& field : nested->fields) {
                     auto fieldType = resolveDeclaredType(field.isAuto, field.isConst, field.typeName, field.defaultValue, decl->line, decl->column, "field '" + field.name + "' of nested struct '" + nestedInfo->name + "'", DeclContext::Field);
                     field.resolvedType = fieldType;
                     nestedInfo->fields.push_back({field.name, fieldType, field.isConst, field.defaultValue});
                 }
-                sym->classInfo->nestedStructs[nested->name] = nestedInfo;
             }
-
-            auto prevClass = currentClass;
-            currentClass = sym->classInfo;
 
             for (auto* method : clas->methods) { //  Методы класса
                 auto methodInfo = std::make_shared<FuncInfo>();

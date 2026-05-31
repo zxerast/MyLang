@@ -1,9 +1,0 @@
-int main(){
-    if ((2+2)==5) {
-    	print("Earth is flat");
-    }
-    else {
-        print("You are ok");
-    }
-    return 0;
-}

@@ -1,0 +1,129 @@
+const int LIST_END = -1;       // Замена null
+
+export class Lists {
+    struct Node {              // Т.к. у нас нет поддержки указателей узел списка хранит не ссылку на следующий узел,
+        int val;               // а индекс следующего узла в глобальном массиве
+        int next;
+    }
+
+    struct IntList {
+        int head;              // Индекс первого узла
+        int tail;              // Индекс последнего узла O(1) вставка в начало
+        int size;              // Логический размер конкретного списка
+    }
+
+    Node[] LIST = [];          // Здесь лежат все узлы списков. Итерация идёт не по порядку массива, а по внутренним индексам next.
+    
+    int new_node(int val) {    // Создание узла
+        Node node;
+        node.val = val;
+        node.next = LIST_END;
+        push(node, LIST);
+        return len(LIST) - 1;
+    }
+
+    IntList new_list() {       // Создание списка 
+        IntList list;
+        list.head = LIST_END;
+        list.tail = LIST_END;
+        list.size = 0;
+        return list;
+    }
+
+    int len_list(IntList list) {
+        return list.size;
+    }
+
+    IntList push_back(IntList list, int val) {  // Добавление ноды в конец
+        int i = new_node(val);
+
+        if (list.head == LIST_END) {
+            list.head = i;
+            list.tail = i;
+        } else {
+            LIST[list.tail].next = i;           // Меняем последний индекс на новый
+            list.tail = i;                      // Новый элемент становится хвостом списка
+        }
+
+        list.size++;
+        return list;
+    }
+
+    IntList push_front(IntList list, int val) { // Добавление ноды в начало
+        int i = new_node(val);
+        LIST[i].next = list.head;               // Следующий элемент нового узла -> текущая голова
+        list.head = i;                          // Смещаем голову на новый узел
+
+        if (list.tail == LIST_END) {
+            list.tail = i;
+        }
+
+        list.size++;
+        return list;
+    }
+
+    IntList delete_first(IntList list, int val) { // Удаление первого вхождения
+        if (list.head == LIST_END) {
+            return list;
+        }
+
+        if (LIST[list.head].val == val) {
+            int old_head = list.head;
+            list.head = LIST[old_head].next;
+            LIST[old_head].next = LIST_END;
+            list.size--;
+
+            if (list.head == LIST_END) {
+                list.tail = LIST_END;
+            }
+
+            return list;
+        }
+
+        int prev = list.head;
+        int cur = LIST[list.head].next;
+
+        while (cur != LIST_END) {
+            if (LIST[cur].val == val) {
+                LIST[prev].next = LIST[cur].next;
+
+                if (list.tail == cur) {
+                    list.tail = prev;
+                }
+
+                LIST[cur].next = LIST_END;
+                list.size--;
+                return list;
+            }
+
+            prev = cur;
+            cur = LIST[cur].next;
+        }
+
+        return list;
+    }
+
+    IntList reverse(IntList list) {             // Разворот списка через перенастройку next-индексов
+        int prev = LIST_END;
+        int cur = list.head;
+        list.tail = list.head;
+
+        while (cur != LIST_END) {
+            int next = LIST[cur].next;
+            LIST[cur].next = prev;
+            prev = cur;
+            cur = next;
+        }
+
+        list.head = prev;
+        return list;
+    }
+
+    void print_list(IntList list) {             // Итерация по списку и вывод
+        int cur = list.head;
+        while (cur != LIST_END) {
+            print(LIST[cur].val);
+            cur = LIST[cur].next;
+        }
+    }
+}
