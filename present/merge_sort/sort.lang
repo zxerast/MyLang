@@ -1,4 +1,4 @@
-int[] merge(int[] arr, int start, int middle, int end) {   // Копируем левую и правую половины во временные массивы
+int[] merge(int[] arr, int start, int middle, int end) {   
     int[] left  = [];
     int[] right = [];
 
@@ -22,7 +22,8 @@ int[] merge(int[] arr, int start, int middle, int end) {   // Копируем �
         if (left[li] <= right[ri]) {
             arr[k] = left[li];
             li++;
-        } else {
+        } 
+        else {
             arr[k] = right[ri];
             ri++;
         }

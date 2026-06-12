@@ -15,11 +15,16 @@ void generate_input_file(string path, int count) {  //  Генерируем в�
 
     srand(cast<uint>(time(0)));   //  Заводим генератор случайных чисел (т.к. неявно int к uint не привести используем каст)
 
-    int i;
+    int i, j;
     while (i < count) {
         int value = rand() % 1000;      //  Пишем в файл
         fprintf(file, "%d ", value);
         i++;
+        if(j > 40) {
+            fprintf(file, "\n");
+            j = 0;
+        }
+        j++;
     }
 
     fclose(file);
@@ -71,15 +76,20 @@ void write_to_file(string path, int[] arr) {
         panic("cannot open output file for writing");
     }
 
-    int i;
+    int i, j;
     while (i < len(arr)) {
         fprintf(file, "%d", arr[i]);
 
         if (i + 1 < len(arr)) {
             fprintf(file, " ");
         }
-
         i++;
+
+        if(j > 40 && i + 1 < len(arr)) {
+            fprintf(file, "\n");
+            j = 0;
+        }
+        j++;
     }
 
     fprintf(file, "\n");
@@ -91,6 +101,7 @@ int main() {
 
     int[] arr = read_from_file(INPUT_FILE);
     arr = merge_sort(arr);
+
     write_to_file(OUTPUT_FILE, arr);
 
     return 0;

@@ -1078,8 +1078,7 @@ struct Parser {
     std::expected<Stmt*, std::string> parseTopDecl(){
         // export обёртка
         if (i < source.size() && source[i].type == TokenType::Import){
-            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: import must appear before all declarations"
-            );
+            return std::unexpected(filePath + ":" + std::to_string(curLine()) + ":" + std::to_string(curColumn()) + ": error: import must appear before all declarations");
         }
         if (i < source.size() && source[i].type == TokenType::Export){
             i++; // съели 'export'

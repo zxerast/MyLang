@@ -1,0 +1,100 @@
+export namespace Math {
+    type Real = float64;    //  Синонимы измерений
+    type Meters = float64;
+    type Area = float64;
+
+    struct Pi {
+        Real value = 3.14;
+    }
+
+    Real abs(Real x) {  //  Модуль
+        if (x < 0) {
+            return -x;
+        }
+
+        return x;
+    }
+
+    Area circle_area(Meters radius) {   //  Площадь круга
+        Pi pi;
+        return pi.value * radius ^ 2;
+    }
+
+    Real mixed_polynomial(int count, Real scale, Meters shift) {    //  Смешанная арифметика
+        return count * scale + shift / 2.0;
+    }
+
+    Real determinant3(Real[3][3] input) {   //  Определитель матрицы 3 на 3 методом Гаусса
+        Real[3][3] a = input;
+        Real det = 1.0;
+        int sign = 1;
+        int i = 0;
+
+        while (i < 3) {
+            int pivot = i;
+            int row = i + 1;
+
+            while (row < 3) {
+                if (abs(a[row][i]) > abs(a[pivot][i])) {
+                    pivot = row;
+                }
+
+                row++;
+            }
+
+            if (abs(a[pivot][i]) < 0.0000001) {
+                return 0;
+            }
+
+            if (pivot != i) {
+                int col = 0;
+
+                while (col < 3) {
+                    Real tmp = a[i][col];
+                    a[i][col] = a[pivot][col];
+                    a[pivot][col] = tmp;
+                    col++;
+                }
+
+                sign = -sign;
+            }
+
+            det *= a[i][i];
+
+            row = i + 1;
+            while (row < 3) {
+                Real factor = a[row][i] / a[i][i];
+                int col = i;
+
+                while (col < 3) {
+                    a[row][col] = a[row][col] - factor * a[i][col];
+                    col++;
+                }
+
+                row++;
+            }
+
+            i++;
+        }
+
+        if (sign < 0) {
+            return -det;
+        }
+
+        return det;
+    }
+
+    Real integrate_square(Real left, Real right, int steps) {   //  Простейший интеграл x^2 методом прямоугольников
+        Real dx = (right - left) / steps;
+        Real sum = 0;
+        int i = 0;
+
+        while (i < steps) {
+            Real x = left + (i + 0.5) * dx;
+            sum += x ^ 2;
+            i++;
+        }
+
+        return sum * dx;
+    }
+}

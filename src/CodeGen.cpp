@@ -89,13 +89,8 @@ int CodeGen::sizeOfType(const std::shared_ptr<Type>& type) const{    //  Воз�
     return 8;
 }
 
-int CodeGen::advanceLocalFrameSize(int frameSize, const std::shared_ptr<Type>& type) const {
+int CodeGen::LocalFrameSize(int frameSize, const std::shared_ptr<Type>& type) const {   //  Узнаём размер локалок
     int size = sizeOfType(type);
-
-    if (size < 8) {
-        size = 8;
-    }
-
     int align = size;
 
     if (align > 8) {
@@ -111,17 +106,15 @@ int CodeGen::advanceLocalFrameSize(int frameSize, const std::shared_ptr<Type>& t
     return frameSize + size;
 }
 
-int CodeGen::allocLocal(const std::shared_ptr<Symbol>& sym, const std::shared_ptr<Type>& type) {
+int CodeGen::allocLocal(const std::shared_ptr<Symbol>& sym, const std::shared_ptr<Type>& type) {    //  Выделяем память под локалки
     int localSize = sizeOfType(type);
     if (localSize < 0) {
         std::string name = sym ? sym->name : std::string("<temporary>");
         codegenError(0, 0, "local '" + name + "' has struct type with unknown layout");
     }
 
-    currentFrameSize = advanceLocalFrameSize(currentFrameSize, type);
-
+    currentFrameSize = LocalFrameSize(currentFrameSize, type);
     int offset = -currentFrameSize;
-
     LocalVar local{offset, type};
 
     if (sym) {
@@ -131,7 +124,7 @@ int CodeGen::allocLocal(const std::shared_ptr<Symbol>& sym, const std::shared_pt
     return offset;
 }
 
-void CodeGen::codegenError(int line, int column, const std::string& message) {
+void CodeGen::codegenError(int line, int column, const std::string& message) {  //  Записываем ошибку
     std::ostringstream ss;
     ss << "codegen";
     if (line > 0) {
@@ -144,7 +137,7 @@ void CodeGen::codegenError(int line, int column, const std::string& message) {
     codegenErrors.push_back(ss.str());
 }
 
-const LocalVar* CodeGen::findLocal(const std::shared_ptr<Symbol>& sym) const {
+const LocalVar* CodeGen::findLocal(const std::shared_ptr<Symbol>& sym) const {      //  Поиск локалки по символу
     if (!sym) {
         return nullptr;
     }
@@ -158,7 +151,7 @@ const LocalVar* CodeGen::findLocal(const std::shared_ptr<Symbol>& sym) const {
     return &it->second;
 }
 
-void CodeGen::emitAlignedCall(const std::string& target) {
+void CodeGen::emitAlignedCall(const std::string& target) {      //  Выравненный вызов функции
     if (currentCallAlignOffset == 0) {
         text << "    call " << target << "\n";
         return;
@@ -182,15 +175,15 @@ static std::string ptrSuffix(const std::shared_ptr<Symbol>& sym) {
     return ss.str();
 }
 
-static std::string memAt(const std::string& baseReg, int offset) {
+static std::string memAt(const std::string& baseReg, int offset) {      //  Размещение по смещению
     return "[" + baseReg + " + " + std::to_string(offset) + "]";
 }
 
-static std::string savedIntArgSlot(int savedParamRegStart, int regIndex) {
+static std::string savedIntArgSlot(int savedParamRegStart, int regIndex) {  //  Размещение по смещению в регистре
     return "[rsp + " + std::to_string((regIndex - savedParamRegStart) * 8) + "]";
 }
 
-static void emitFloatCompare(std::ostringstream& text, Operand op, const char* cmpInstr) {
+static void emitFloatCompare(std::ostringstream& text, Operand op, const char* cmpInstr) {  //  Сравнение float чисел
     text << "    " << cmpInstr << " xmm0, xmm1\n";
     const char* cc = "e";
     bool notEqual = false;
@@ -220,7 +213,7 @@ static void emitFloatCompare(std::ostringstream& text, Operand op, const char* c
     text << "    movzx rax, al\n";
 }
 
-static void emitFloatPow(std::ostringstream& text, bool isFloat32) {
+static void emitFloatPow(std::ostringstream& text, bool isFloat32) {    //  Дробная степень
     if (isFloat32) {
         text << "    sub rsp, 8\n";
         text << "    movd dword [rsp], xmm0\n";
@@ -261,7 +254,54 @@ static void emitFloatPow(std::ostringstream& text, bool isFloat32) {
     }
 }
 
-void CodeGen::compileEarlyConstGlobalInit(const GlobalVarInit& global) {
+static bool exprReferencesSymbol(Expr* expr, const std::shared_ptr<Symbol>& sym) {  //  Проверка является ли символ переопределением внутри одной области видимости
+    if (!expr || !sym) return false;
+
+    if (auto* id = dynamic_cast<Identifier*>(expr)) {
+        return id->resolvedSym == sym;
+    }
+    if (auto* na = dynamic_cast<NamespaceAccess*>(expr)) {
+        return na->resolvedSym == sym;
+    }
+    if (auto* bin = dynamic_cast<Binary*>(expr)) {
+        return exprReferencesSymbol(bin->left, sym) || exprReferencesSymbol(bin->right, sym);
+    }
+    if (auto* unary = dynamic_cast<Unary*>(expr)) {
+        return exprReferencesSymbol(unary->operand, sym);
+    }
+    if (auto* castExpr = dynamic_cast<CastExpr*>(expr)) {
+        return exprReferencesSymbol(castExpr->value, sym);
+    }
+    if (auto* call = dynamic_cast<FuncCall*>(expr)) {
+        if (exprReferencesSymbol(call->callee, sym)) return true;
+        for (auto* arg : call->args) {
+            if (exprReferencesSymbol(arg, sym)) return true;
+        }
+        return false;
+    }
+    if (auto* field = dynamic_cast<FieldAccess*>(expr)) {
+        return exprReferencesSymbol(field->object, sym);
+    }
+    if (auto* arrayAccess = dynamic_cast<ArrayAccess*>(expr)) {
+        return exprReferencesSymbol(arrayAccess->object, sym) || exprReferencesSymbol(arrayAccess->index, sym);
+    }
+    if (auto* arrayLit = dynamic_cast<ArrayLiteral*>(expr)) {
+        for (auto* element : arrayLit->elements) {
+            if (exprReferencesSymbol(element, sym)) return true;
+        }
+        return false;
+    }
+    if (auto* structLit = dynamic_cast<StructLiteral*>(expr)) {
+        for (auto& field : structLit->fields) {
+            if (exprReferencesSymbol(field.value, sym)) return true;
+        }
+        return false;
+    }
+
+    return false;
+}
+
+void CodeGen::compileEarlyConstGlobalInit(const GlobalVarInit& global) {    //  Заполнение глобальных констант до дефолтных значений
     if (!global.decl || !global.decl->isConst || !global.var || !global.var->resolvedSym) {
         return;
     }
@@ -339,15 +379,7 @@ std::shared_ptr<Type> CodeGen::varInitType(VarInit* v) const {
     return nullptr;
 }
 
-std::shared_ptr<Type> CodeGen::paramType(const Param& p) const {
-    if (p.resolvedSym && p.resolvedSym->type) {
-        return p.resolvedSym->type;
-    }
-
-    return nullptr;
-}
-
-std::shared_ptr<Type> CodeGen::paramType(FuncDecl* func, size_t index) const {
+std::shared_ptr<Type> CodeGen::paramType(FuncDecl* func, size_t index) const {  //  Тип параметров функций и методов
     if (!func) {
         return nullptr;
     }
@@ -363,13 +395,16 @@ std::shared_ptr<Type> CodeGen::paramType(FuncDecl* func, size_t index) const {
     }
 
     if (index < func->params.size()) {
-        return paramType(func->params[index]);
+        auto p = func->params[index];
+        if (p.resolvedSym && p.resolvedSym->type) {
+            return p.resolvedSym->type;
+        }
     }
 
     return nullptr;
 }
 
-std::shared_ptr<Type> CodeGen::returnType(FuncDecl* func) const {
+std::shared_ptr<Type> CodeGen::returnType(FuncDecl* func) const {   //  Тип возврата функции
     if (!func) {
         return nullptr;
     }
@@ -386,7 +421,7 @@ std::shared_ptr<Type> CodeGen::returnType(FuncDecl* func) const {
     return nullptr;
 }
 
-std::shared_ptr<Type> CodeGen::fieldType(FieldAccess* f) const {
+std::shared_ptr<Type> CodeGen::fieldType(FieldAccess* f) const {    //  Тип поля
     if (!f) {
         return nullptr;
     }
@@ -402,7 +437,7 @@ std::shared_ptr<Type> CodeGen::fieldType(FieldAccess* f) const {
     return nullptr;
 }
 
-std::shared_ptr<FuncInfo> CodeGen::callFuncInfo(FuncCall* call) const {
+std::shared_ptr<FuncInfo> CodeGen::callFuncInfo(FuncCall* call) const { //  Возврат информации о функции
     if (!call) {
         return nullptr;
     }
@@ -418,7 +453,7 @@ std::shared_ptr<FuncInfo> CodeGen::callFuncInfo(FuncCall* call) const {
     return nullptr;
 }
 
-std::shared_ptr<Type> CodeGen::callReturnType(FuncCall* call) const {
+std::shared_ptr<Type> CodeGen::callReturnType(FuncCall* call) const {   //  Тип возврата выражения
     if (!call) {
         return nullptr;
     }
@@ -489,161 +524,6 @@ std::string CodeGen::symbolLabel(const std::shared_ptr<Symbol>& sym, const std::
     return mangleQualifiedName(fallbackName);
 }
 
-bool CodeGen::isSignedIntType(const std::shared_ptr<Type>& type) {
-    if (!type) return false;
-    return type->kind == TypeKind::Int8
-        || type->kind == TypeKind::Int16
-        || type->kind == TypeKind::Int32
-        || type->kind == TypeKind::Int64;
-}
-
-bool CodeGen::isUnsignedIntType(const std::shared_ptr<Type>& type) {
-    if (!type) return false;
-    return type->kind == TypeKind::Uint8
-        || type->kind == TypeKind::Uint16
-        || type->kind == TypeKind::Uint32
-        || type->kind == TypeKind::Uint64;
-}
-
-bool CodeGen::isIntegerLikeType(const std::shared_ptr<Type>& type) {
-    if (!type) return false;
-    return isSignedIntType(type)
-        || isUnsignedIntType(type)
-        || type->kind == TypeKind::Bool
-        || type->kind == TypeKind::Char;
-}
-
-bool CodeGen::isFloatType(const std::shared_ptr<Type>& type) {
-    if (!type) return false;
-    return type->kind == TypeKind::Float32 || type->kind == TypeKind::Float64;
-}
-
-static bool isCodegenNumericType(const std::shared_ptr<Type>& type) {
-    if (!type) return false;
-    switch (type->kind) {
-        case TypeKind::Int8:
-        case TypeKind::Int16:
-        case TypeKind::Int32:
-        case TypeKind::Int64:
-        case TypeKind::Uint8:
-        case TypeKind::Uint16:
-        case TypeKind::Uint32:
-        case TypeKind::Uint64:
-        case TypeKind::Bool:
-        case TypeKind::Char:
-        case TypeKind::Float32:
-        case TypeKind::Float64:
-            return true;
-        default:
-            return false;
-    }
-}
-
-static bool isCodegenFloatType(const std::shared_ptr<Type>& type) {
-    return type && (type->kind == TypeKind::Float32 || type->kind == TypeKind::Float64);
-}
-
-static bool isCodegenIntType(const std::shared_ptr<Type>& type) {
-    if (!type) return false;
-
-    switch (type->kind) {
-        case TypeKind::Int8:
-        case TypeKind::Int16:
-        case TypeKind::Int32:
-        case TypeKind::Int64:
-        case TypeKind::Uint8:
-        case TypeKind::Uint16:
-        case TypeKind::Uint32:
-        case TypeKind::Uint64:
-            return true;
-        default:
-            return false;
-    }
-}
-
-static bool isCodegenSignedIntType(const std::shared_ptr<Type>& type) {
-    return type && type->kind >= TypeKind::Int8 && type->kind <= TypeKind::Int64;
-}
-
-static bool isCodegenUnsignedIntType(const std::shared_ptr<Type>& type) {
-    return type && type->kind >= TypeKind::Uint8 && type->kind <= TypeKind::Uint64;
-}
-
-static int codegenIntBitWidth(const std::shared_ptr<Type>& type) {
-    if (!type) return 0;
-    switch (type->kind) {
-        case TypeKind::Int8:
-        case TypeKind::Uint8: return 8;
-        case TypeKind::Int16:
-        case TypeKind::Uint16: return 16;
-        case TypeKind::Int32:
-        case TypeKind::Uint32: return 32;
-        case TypeKind::Int64:
-        case TypeKind::Uint64: return 64;
-        default: return 0;
-    }
-}
-
-static TypeKind codegenSignedIntKindForBits(int bits) {
-    if (bits <= 8) return TypeKind::Int8;
-    if (bits <= 16) return TypeKind::Int16;
-    if (bits <= 32) return TypeKind::Int32;
-    return TypeKind::Int64;
-}
-
-static bool isCodegenInputArrayType(const std::shared_ptr<Type>& type) {
-    if (!type || (type->kind != TypeKind::Array && type->kind != TypeKind::DynArray) || !type->elementType) {
-        return false;
-    }
-
-    auto elem = type->elementType;
-    return elem->kind == TypeKind::String
-        || elem->kind == TypeKind::Char
-        || isCodegenIntType(elem)
-        || isCodegenFloatType(elem);
-}
-
-static int codegenInputTypeCode(const std::shared_ptr<Type>& type) {
-    if (!type) return 0;
-
-    switch (type->kind) {
-        case TypeKind::Int8:    return 1;
-        case TypeKind::Int16:   return 2;
-        case TypeKind::Int32:   return 3;
-        case TypeKind::Int64:   return 4;
-        case TypeKind::Uint8:   return 5;
-        case TypeKind::Uint16:  return 6;
-        case TypeKind::Uint32:  return 7;
-        case TypeKind::Uint64:  return 8;
-        case TypeKind::Float32: return 9;
-        case TypeKind::Float64: return 10;
-        case TypeKind::String:  return 11;
-        case TypeKind::Char:    return 12;
-        default:                return 0;
-    }
-}
-
-static int codegenDynArrayElemSize(const std::shared_ptr<Type>& elemType) {
-    if (!elemType) return 8;
-
-    switch (elemType->kind) {
-        case TypeKind::Int8:
-        case TypeKind::Uint8:
-        case TypeKind::Bool:
-        case TypeKind::Char:
-            return 1;
-        case TypeKind::Int16:
-        case TypeKind::Uint16:
-            return 2;
-        case TypeKind::Int32:
-        case TypeKind::Uint32:
-        case TypeKind::Float32:
-            return 4;
-        default:
-            return 8;
-    }
-}
-
 static std::string shellQuote(const std::string& value) {
     std::string result = "'";
 
@@ -666,50 +546,6 @@ static std::string appendQualifiedName(const std::string& prefix, const std::str
     }
 
     return prefix + "::" + name;
-}
-
-static std::shared_ptr<Type> makeCodegenScalarType(TypeKind kind) {
-    auto type = std::make_shared<Type>();
-    type->kind = kind;
-    return type;
-}
-
-static std::shared_ptr<Type> codegenCommonNumericType(const std::shared_ptr<Type>& a, const std::shared_ptr<Type>& b) {
-    if (!isCodegenNumericType(a) || !isCodegenNumericType(b)) return nullptr;
-
-    if (isCodegenFloatType(a) || isCodegenFloatType(b)) {
-        if ((a && a->kind == TypeKind::Float64) || (b && b->kind == TypeKind::Float64)) {
-            return makeCodegenScalarType(TypeKind::Float64);
-        }
-        return makeCodegenScalarType(TypeKind::Float32);
-    }
-
-    if (isCodegenSignedIntType(a) && isCodegenSignedIntType(b)) {
-        return codegenIntBitWidth(a) >= codegenIntBitWidth(b) ? a : b;
-    }
-
-    if (isCodegenUnsignedIntType(a) && isCodegenUnsignedIntType(b)) {
-        return codegenIntBitWidth(a) >= codegenIntBitWidth(b) ? a : b;
-    }
-
-    if ((isCodegenSignedIntType(a) && isCodegenUnsignedIntType(b)) || (isCodegenUnsignedIntType(a) && isCodegenSignedIntType(b))) {
-        auto signedType = isCodegenSignedIntType(a) ? a : b;
-        auto unsignedType = isCodegenUnsignedIntType(a) ? a : b;
-        int signedBits = codegenIntBitWidth(signedType);
-        int unsignedBits = codegenIntBitWidth(unsignedType);
-        int commonBits = signedBits;
-
-        if (signedBits <= unsignedBits) {
-            commonBits = unsignedBits * 2;
-        }
-
-        if (commonBits <= 64) {
-            return makeCodegenScalarType(codegenSignedIntKindForBits(commonBits));
-        }
-        return makeCodegenScalarType(TypeKind::Float64);
-    }
-
-    return a;
 }
 
 bool CodeGen::isCompositeMemoryType(const std::shared_ptr<Type>& type) {
@@ -1072,7 +908,7 @@ void CodeGen::emitCopy(const std::string& dstReg, const std::string& srcReg, con
 
     // dynamic array: deep-copy header + heap buffer
     if (type->kind == TypeKind::DynArray) {
-        int elemSize = isCompositeMemoryType(type->elementType) ? sizeOfType(type->elementType) : codegenDynArrayElemSize(type->elementType);
+        int elemSize = isCompositeMemoryType(type->elementType) ? sizeOfType(type->elementType) : dynArrayElemSize(type->elementType);
         if (elemSize <= 0) elemSize = 8;
 
         std::string emptyLabel = newLabel("dyn_empty");
@@ -1436,7 +1272,7 @@ void CodeGen::emitAddress(Expr* expr) {
 
             int elemSize = 8;
             if (objType->elementType) {
-                elemSize = isCompositeMemoryType(objType->elementType) ? sizeOfType(objType->elementType) : codegenDynArrayElemSize(objType->elementType);
+                elemSize = isCompositeMemoryType(objType->elementType) ? sizeOfType(objType->elementType) : dynArrayElemSize(objType->elementType);
             }
 
             if (elemSize == 1) {
@@ -2118,7 +1954,7 @@ void CodeGen::compileFunction(FuncDecl* func, bool isMethod) {
     //  В начале main инициализируем runtime default-слоты объявленными default-выражениями
     //  или default-значениями типов. Дальше `Type.field = value` меняет эти слоты уже в runtime.
     if (!isMethod && func->name == "main") {
-        //  Default-поля могут ссылаться на const-целые, например `int left = END`.
+        //  Default-поля могут ссылаться на const-целые.
         //  Такие константы должны существовать до заполнения __default_<Struct>_<field>.
         for (auto& global : globalVars) {
             compileEarlyConstGlobalInit(global);
@@ -2223,7 +2059,7 @@ int CodeGen::countLocalsSize(Stmt* stmt, int frameSize) {  //  Считаем la
     if (auto* var = dynamic_cast<VarDecl*>(stmt)) { //  Переменные
         for (auto* init : var->vars) {
             std::shared_ptr<Type> type = varInitType(init);
-            frameSize = advanceLocalFrameSize(frameSize, type);
+            frameSize = LocalFrameSize(frameSize, type);
         }
         return frameSize;
     }
@@ -2256,6 +2092,11 @@ void CodeGen::compileStmt(Stmt* stmt) {
             }
             
             if (init->init) {   //  Смотрим инициализатор
+                if (exprReferencesSymbol(init->init, init->resolvedSym)) {
+                    text << "    lea rdi, [rbp" << off << "]\n";
+                    emitRuntimeDefaultAt("rdi", 0, type);
+                }
+
                 if (type && type->kind == TypeKind::Class) {
                     auto* initCall = dynamic_cast<FuncCall*>(init->init);
                     bool directStore = dynamic_cast<NullLiteral*>(init->init) || (initCall && initCall->resolvedCallee && initCall->resolvedCallee->kind == SymbolKind::Class);
@@ -2704,7 +2545,7 @@ void CodeGen::compileExpr(Expr* expr) {
         if (arrType->kind == TypeKind::DynArray) {
             int n = (int)arrayLit->elements.size(); //  Размер массива = кол-во элементов
             auto elemType = arrType->elementType; //    Тип элемента
-            int elemSize = isCompositeMemoryType(elemType) ? sizeOfType(elemType) : codegenDynArrayElemSize(elemType);  //  Если элемент структура или класс 
+            int elemSize = isCompositeMemoryType(elemType) ? sizeOfType(elemType) : dynArrayElemSize(elemType);  //  Если элемент структура или класс 
 
             text << "    mov rdi, 24\n";
             emitAlignedCall("lang_alloc");
@@ -3105,8 +2946,8 @@ void CodeGen::compileExpr(Expr* expr) {
 
         //  Float-арифметика/сравнения: оба операнда приводим к общему float-типу.
         auto binaryResultType = exprType(bin);
-        auto numericType = isCodegenFloatType(binaryResultType) ? binaryResultType : codegenCommonNumericType(leftType, rightType);
-        bool isFloat = isCodegenFloatType(numericType);
+        auto numericType = isFloatType(binaryResultType) ? binaryResultType : commonType(leftType, rightType);
+        bool isFloat = isFloatType(numericType);
 
         if (isFloat && bin->op != Operand::Mod) {   //  Для float % не определён
             compileExprAs(bin->left, numericType);
@@ -3637,7 +3478,7 @@ void CodeGen::compileExpr(Expr* expr) {
                 return;
             }
 
-            if (isCodegenIntType(inputType)) {
+            if (isIntType(inputType)) {
                 emitAlignedCall("lang_input");
                 text << "    mov rdi, rax\n";
                 text << "    mov rsi, " << fc->line << "\n";
@@ -3645,7 +3486,7 @@ void CodeGen::compileExpr(Expr* expr) {
                 return;
             }
 
-            if (isCodegenFloatType(inputType)) {
+            if (isFloatType(inputType)) {
                 emitAlignedCall("lang_input");
                 text << "    mov rdi, rax\n";
                 text << "    mov rsi, " << fc->line << "\n";
@@ -3658,8 +3499,8 @@ void CodeGen::compileExpr(Expr* expr) {
                 return;
             }
 
-            if (isCodegenInputArrayType(inputType) && inputType->kind == TypeKind::Array) {
-                int typeCode = codegenInputTypeCode(inputType->elementType);
+            if (isInputArrayType(inputType) && inputType->kind == TypeKind::Array) {
+                int typeCode = inputTypeCode(inputType->elementType);
                 text << "    mov rdi, " << typeCode << "\n";
                 text << "    mov rsi, " << inputType->arraySize << "\n";
                 text << "    mov rdx, " << fc->line << "\n";
@@ -3667,8 +3508,8 @@ void CodeGen::compileExpr(Expr* expr) {
                 return;
             }
 
-            if (isCodegenInputArrayType(inputType) && inputType->kind == TypeKind::DynArray) {
-                int typeCode = codegenInputTypeCode(inputType->elementType);
+            if (isInputArrayType(inputType) && inputType->kind == TypeKind::DynArray) {
+                int typeCode = inputTypeCode(inputType->elementType);
                 text << "    mov rdi, " << typeCode << "\n";
                 text << "    mov rsi, " << fc->line << "\n";
                 emitAlignedCall("lang_input_array_dyn");
@@ -3707,7 +3548,7 @@ void CodeGen::compileExpr(Expr* expr) {
                     auto elemType = argType->elementType;
                     bool elemIsFloat = elemType && (elemType->kind == TypeKind::Float32 || elemType->kind == TypeKind::Float64);
                     int elemSz = isDynArray
-                        ? (isCompositeMemoryType(elemType) ? sizeOfType(elemType) : codegenDynArrayElemSize(elemType))
+                        ? (isCompositeMemoryType(elemType) ? sizeOfType(elemType) : dynArrayElemSize(elemType))
                         : sizeOfType(elemType);
                     bool isSigned = elemType && (elemType->kind == TypeKind::Int8 || elemType->kind == TypeKind::Int16
                                               || elemType->kind == TypeKind::Int32 || elemType->kind == TypeKind::Int64);
@@ -3850,7 +3691,7 @@ void CodeGen::compileExpr(Expr* expr) {
                 return;
             }
 
-            int elemSize = codegenDynArrayElemSize(elemType);
+            int elemSize = dynArrayElemSize(elemType);
             if (elemSize <= 0) elemSize = 8;
 
             //  Scalar-элементы тоже пишем sized-путём, чтобы layout совпадал
@@ -3878,7 +3719,7 @@ void CodeGen::compileExpr(Expr* expr) {
                 emitAlignedCall("lang_pop_sized");
             }
             else {
-                int elemSize = codegenDynArrayElemSize(elemType);
+                int elemSize = dynArrayElemSize(elemType);
                 if (elemSize <= 0) elemSize = 8;
                 text << "    mov rdx, " << elemSize << "\n";
                 emitAlignedCall("lang_pop_sized");

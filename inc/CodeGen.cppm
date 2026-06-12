@@ -54,10 +54,6 @@ export class CodeGen {     //  Буферы секций — собираем в
 
     std::shared_ptr<Type> currentReturnType = nullptr;
 
-    static bool isSignedIntType(const std::shared_ptr<Type>& type);
-    static bool isUnsignedIntType(const std::shared_ptr<Type>& type);
-    static bool isIntegerLikeType(const std::shared_ptr<Type>& type);
-    static bool isFloatType(const std::shared_ptr<Type>& type);
     static bool isCompositeMemoryType(const std::shared_ptr<Type>& type);
 
     void emitNullCheck(const std::string& reg, int line);
@@ -146,7 +142,7 @@ export class CodeGen {     //  Буферы секций — собираем в
     std::vector<std::string> codegenErrors;
     void codegenError(int line, int column, const std::string& message);
 
-    int advanceLocalFrameSize(int frameSize, const std::shared_ptr<Type>& type) const;
+    int LocalFrameSize(int frameSize, const std::shared_ptr<Type>& type) const;
     void compileFunction(FuncDecl* func, bool isMethod = false);   //  Компиляция функции/метода; isMethod=true резервирует self в rdi
     void compileMethod(FuncDecl* f, const std::string& labelName);
     int countLocalsSize(Stmt* size, int frameSize);    //  Dry-run layout локалок тем же алгоритмом, что allocLocal

@@ -10,7 +10,7 @@ void set_error(string message) {
     }
 }
 
-bool is_blank(string text) {
+bool is_blank(string text) {    //  Пустой ли ввод
     int i = 0;
     while (i < len(text)) {
         if (!(cast<int>(text[i]) == 32 || cast<int>(text[i]) == 9 || cast<int>(text[i]) == 13)) {
@@ -32,7 +32,7 @@ char peek() {
 }
 
 void skip_spaces() {
-    while (POS < len(SOURCE) && (cast<int>(SOURCE[POS]) == 32 || cast<int>(SOURCE[POS]) == 9 || cast<int>(SOURCE[POS]) == 13)) {
+    while (POS < len(SOURCE) && (cast<int>(SOURCE[POS]) == 32 || cast<int>(SOURCE[POS]) == 9 || cast<int>(SOURCE[POS]) == 13)) {    //  Пропускаем пробелы
         POS++;
     }
 }
@@ -144,7 +144,7 @@ int parse_mul() {
 }
 
 int parse_expression() {
-    int value = parse_mul();
+    int value = parse_mul();    //  '*', '/'
 
     while (!PARSE_ERROR) {
         if (match('+')) {
@@ -167,10 +167,10 @@ void evaluate(string line) {
     PARSE_ERROR = false;
     ERROR_MESSAGE = "";
 
-    int result = parse_expression();
+    int result = parse_expression();    //  '+', '-'
     skip_spaces();
 
-    if (!PARSE_ERROR && POS < len(SOURCE)) {
+    if (!PARSE_ERROR && POS < len(SOURCE)) {    
         set_error("unexpected symbol");
     }
 
@@ -186,13 +186,13 @@ int main() {
     while (true) {
         print(">_________");
 
-        string line = input();
+        string line = input();  
 
-        if (line == "exit") {
+        if (line == "exit") {   
             return 0;
         }
 
-        if (!is_blank(line)) {
+        if (!is_blank(line)) {  
             evaluate(line);
         }
     }

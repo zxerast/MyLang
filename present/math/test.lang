@@ -1,0 +1,28 @@
+import "math.lang"
+
+int main() {
+    Math::Real[3][3] matrix = [
+        [2.0, 1.0, 3.0],
+        [0.0, -1.0, 2.0],
+        [4.0, 1.0, 7.0]
+    ];
+
+    Math::Real det = Math::determinant3(matrix);
+
+    Math::Meters radius = 2.0;
+    Math::Area real_area = Math::circle_area(radius);
+
+    Math::Pi.value = 3.0;
+    Math::Area classroom_area = Math::circle_area(radius);
+
+    Math::Real integral = Math::integrate_square(0.0, 3.0, 300);
+    Math::Real mixed = Math::mixed_polynomial(3, 2.5, radius);
+
+    print("determinant:", det);
+    print("area default pi:", real_area);
+    print("area overridden pi:", classroom_area);
+    print("integral x^2 [0;3]:", integral);
+    print("mixed arithmetic:", mixed);
+
+    return 0;
+}

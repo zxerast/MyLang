@@ -27,81 +27,6 @@ struct CImportVisitorCtx {
     int skipped = 0;
 };
 
-// функции для работы с типами
-
-static std::shared_ptr<Type> makeType(TypeKind kind) {  //  Определение сущности типа
-    auto type = std::make_shared<Type>();
-    type->kind = kind;
-    return type;
-}
-
-static std::shared_ptr<Type> makeArrayType(std::shared_ptr<Type> elem, int size) {  // Тоже самое для массивов
-    auto type = std::make_shared<Type>();
-    type->kind = TypeKind::Array;
-    type->elementType = elem;  //  Тип массива определяем по первому элементу
-    type->arraySize = size;
-    return type;
-}
-
-static std::shared_ptr<Type> makeDynArrayType(std::shared_ptr<Type> elem) {
-    auto type = std::make_shared<Type>();
-    type->kind = TypeKind::DynArray;
-    type->elementType = elem;
-    type->arraySize = -1;
-    return type;
-}
-
-static bool typesEqual(const std::shared_ptr<Type>& a, const std::shared_ptr<Type>& b) {
-    if (!a || !b) {     //  Кого-то из типов несуществует
-        return false;
-    }     
-    if (a->kind != b->kind) {   //  Если типы объекты разные по сущности (kind из модуля types)
-        return false;
-    }
-    if (a->kind == TypeKind::Array) {   //  Массивы рекурсивно проверяем по типам элементов
-        if (!typesEqual(a->elementType, b->elementType)) {
-            return false;
-        }
-
-        return a->arraySize == b->arraySize;
-    }
-    if (a->kind == TypeKind::DynArray) {    //  Динамические точно также, но можно без размера
-        return typesEqual(a->elementType, b->elementType);
-    }
-    if (a->kind == TypeKind::Struct || a->kind == TypeKind::Class || a->kind == TypeKind::Alias) {
-        return a->name == b->name;  //  Структуры, классы и алаясы просто сверяем по имени
-    }
-    return true;  //  примитивы одной сущности — одинаковые
-}
-
-static std::string typeToString(const std::shared_ptr<Type>& type) {   //  Переводим тип в строку
-    if (!type) return "<unknown>";                                     //  Это для записи в ошибки
-    switch (type->kind) {
-        case TypeKind::Int8:    return "int8";
-        case TypeKind::Int16:   return "int16";
-        case TypeKind::Int32:   return "int32";
-        case TypeKind::Int64:   return "int64";
-        case TypeKind::Uint8:   return "uint8";
-        case TypeKind::Uint16:  return "uint16";
-        case TypeKind::Uint32:  return "uint32";
-        case TypeKind::Uint64:  return "uint64";
-        case TypeKind::Float32: return "float32";
-        case TypeKind::Float64: return "float64";
-        case TypeKind::Bool:    return "bool";
-        case TypeKind::Char:    return "char";
-        case TypeKind::String:  return "string";
-        case TypeKind::Void:    return "void";
-        case TypeKind::Array:
-            return typeToString(type->elementType) + "[" + std::to_string(type->arraySize) + "]";
-        
-        case TypeKind::Struct:  return type->name;
-        case TypeKind::Class:   return type->name;
-        case TypeKind::Alias:   return type->name;
-        case TypeKind::Null:    return "null";
-        default:                return "<unknown>";
-    }
-}
-
 static std::string typeNameToString(TypeName* typeName) {   //  Переводим массивный тип в строку 
     if (!typeName) {                                        //  Тоже для ошибок
         return "<auto>";
@@ -121,193 +46,6 @@ static std::string typeNameToString(TypeName* typeName) {   //  Переводи
     }
 
     return result;
-}
-
-static bool isIntType(const std::shared_ptr<Type>& type) {  //  Целочисленный ли тип?
-    if (!type) return false;
-
-    switch (type->kind) {
-        case TypeKind::Int8: 
-        case TypeKind::Int16: 
-        case TypeKind::Int32:
-        case TypeKind::Int64:
-        case TypeKind::Uint8: 
-        case TypeKind::Uint16: 
-        case TypeKind::Uint32: 
-        case TypeKind::Uint64:
-            return true;
-        default:
-            return false;
-    }
-}
-
-static bool isFloatType(const std::shared_ptr<Type>& type) {    //  Дробный ли тип?
-    if (!type) return false;
-    return type->kind == TypeKind::Float32 || type->kind == TypeKind::Float64;
-}
-
-static bool isNumericType(const std::shared_ptr<Type>& type) {  //  Числовой ли тип?
-    return isIntType(type) || isFloatType(type);    
-}
-
-static bool isInputSupportedType(const std::shared_ptr<Type>& type) {   //  Выводим ли тип в терминал
-    if (!type) return false;
-
-    if (type->kind == TypeKind::String || type->kind == TypeKind::Char || isIntType(type) || isFloatType(type)) {
-        return true;
-    }
-
-    if (type->kind == TypeKind::Array) {
-        return type->elementType && (type->elementType->kind == TypeKind::String
-                || type->elementType->kind == TypeKind::Char
-                || isIntType(type->elementType)
-                || isFloatType(type->elementType));
-    }
-
-    if (type->kind == TypeKind::DynArray) {
-        return type->elementType && (type->elementType->kind == TypeKind::String
-                || type->elementType->kind == TypeKind::Char
-                || isIntType(type->elementType)
-                || isFloatType(type->elementType));
-    }
-
-    return false;
-}
-
-//  Ранг типа для widening-приведений
-//  Любой тип меньшего ранга мы можем неявно преобразовать в тип большего, но не наоборот
-//  int8(1) < int16(2) < int32(3) < int64(4) < float32(5) < float64(6)
-//  uint8(1) < uint16(2) < uint32(3) < uint64(4) < float32(5) < float64(6)
-static int typeRank(const std::shared_ptr<Type>& type) {
-    if (!type) return 0;
-    switch (type->kind) {
-        case TypeKind::Int8:    
-        case TypeKind::Uint8:    return 1;
-        case TypeKind::Int16:   
-        case TypeKind::Uint16:   return 2;
-        case TypeKind::Int32:   
-        case TypeKind::Uint32:   return 3;
-        case TypeKind::Int64:   
-        case TypeKind::Uint64:   return 4;
-        case TypeKind::Float32:  return 5;
-        case TypeKind::Float64:  return 6;
-        default:                 return 0;
-    }
-}
-
-static bool isSignedIntType(const std::shared_ptr<Type>& type) {
-    return type && type->kind >= TypeKind::Int8 && type->kind <= TypeKind::Int64;
-}
-
-static bool isUnsignedIntType(const std::shared_ptr<Type>& type) {
-    return type && type->kind >= TypeKind::Uint8 && type->kind <= TypeKind::Uint64;
-}
-
-static int intBitWidth(const std::shared_ptr<Type>& type) {
-    if (!type) return 0;
-    switch (type->kind) {
-        case TypeKind::Int8:
-        case TypeKind::Uint8: return 8;
-        case TypeKind::Int16:
-        case TypeKind::Uint16: return 16;
-        case TypeKind::Int32:
-        case TypeKind::Uint32: return 32;
-        case TypeKind::Int64:
-        case TypeKind::Uint64: return 64;
-        default: return 0;
-    }
-}
-
-static TypeKind signedIntKindForBits(int bits) {
-    if (bits <= 8) return TypeKind::Int8;
-    if (bits <= 16) return TypeKind::Int16;
-    if (bits <= 32) return TypeKind::Int32;
-    return TypeKind::Int64;
-}
-
-//  Возможно ли неявное преобразование между типами
-static bool isImplicitlyConvertible(const std::shared_ptr<Type>& from, const std::shared_ptr<Type>& to) {
-    if (!from || !to) return false;
-
-    if (typesEqual(from, to)) return true;  //  одинаковые типы — всегда ок
-
-    //  Signed int -> signed int 
-    if (from->kind >= TypeKind::Int8 && from->kind <= TypeKind::Int64 && to->kind >= TypeKind::Int8 && to->kind <= TypeKind::Int64) {
-        return typeRank(from) <= typeRank(to);
-    }
-
-    //  Unsigned int -> unsigned int 
-    if (from->kind >= TypeKind::Uint8 && from->kind <= TypeKind::Uint64 && to->kind >= TypeKind::Uint8 && to->kind <= TypeKind::Uint64) {
-        return typeRank(from) <= typeRank(to);
-    }
-
-    //  float32 -> float64
-    if (from->kind == TypeKind::Float32 && to->kind == TypeKind::Float64)
-        return true;
-
-    //  Любой int/uint → float32/float64
-    if (isIntType(from) && isFloatType(to))
-        return true;
-
-    //  Array -> DynArray
-    //  Позволяет: int[] arr = [1, 2, 3];  и  int[][] m = [[1, 2], [3, 4]];
-    //  Рекурсивно проверяем элементы (для вложенных массивов)
-    if (from->kind == TypeKind::Array && to->kind == TypeKind::DynArray)
-        return from->elementType && to->elementType && isImplicitlyConvertible(from->elementType, to->elementType);
-
-    //  null — пустая ссылка на объект класса. Struct всегда value-тип.
-    if (from->kind == TypeKind::Null) {
-        return to->kind == TypeKind::Class;
-    }
-
-    return false;
-}
-
-static bool isUnsupportedEqualityType(const std::shared_ptr<Type>& type) {
-    if (!type) return true;
-
-    return type->kind == TypeKind::Struct
-        || type->kind == TypeKind::Array
-        || type->kind == TypeKind::DynArray;
-}
-
-static bool integerLiteralFitsType(double value, const std::shared_ptr<Type>& type) {
-    if (!type) return true;     //     Входит ли число в свой тип  
-
-    switch (type->kind) {
-        case TypeKind::Int8:
-            return value >= static_cast<double>(std::numeric_limits<int8_t>::lowest())
-                && value <= static_cast<double>(std::numeric_limits<int8_t>::max());
-        case TypeKind::Int16:
-            return value >= static_cast<double>(std::numeric_limits<int16_t>::lowest())
-                && value <= static_cast<double>(std::numeric_limits<int16_t>::max());
-        case TypeKind::Int32:
-            return value >= static_cast<double>(std::numeric_limits<int32_t>::lowest())
-                && value <= static_cast<double>(std::numeric_limits<int32_t>::max());
-        case TypeKind::Int64:
-            return value >= static_cast<double>(std::numeric_limits<int64_t>::lowest())
-                && value <= static_cast<double>(std::numeric_limits<int64_t>::max());
-
-        case TypeKind::Uint8:
-            return value >= 0.0
-                && value <= static_cast<double>(std::numeric_limits<uint8_t>::max());
-        case TypeKind::Uint16:
-            return value >= 0.0
-                && value <= static_cast<double>(std::numeric_limits<uint16_t>::max());
-        case TypeKind::Uint32:
-            return value >= 0.0
-                && value <= static_cast<double>(std::numeric_limits<uint32_t>::max());
-        case TypeKind::Uint64:
-            return value >= 0.0
-                && value <= static_cast<double>(std::numeric_limits<uint64_t>::max());
-
-        case TypeKind::Char:
-            return value >= 0.0
-                && value <= static_cast<double>(std::numeric_limits<unsigned char>::max());
-
-        default:
-            return true;
-    }
 }
 
 Expr* SemanticAnalyzer::makeDefaultExprForType(const std::shared_ptr<Type>& type, int line, int column) {
@@ -432,107 +170,6 @@ FieldInfo* findFieldInTypeSymbol(std::shared_ptr<Symbol> sym, const std::string&
 
     return nullptr;
 }
-//  Проверяет допустимость явного приведения cast<To>(from)
-//  int -> int, int -> float, float -> int, float -> float,
-//  int -> bool, char -> int.  string -> числовые — нельзя.
-static bool isCastable(const std::shared_ptr<Type>& from, const std::shared_ptr<Type>& to) {
-    if (!from || !to) return false;
-
-    if (typesEqual(from, to)) return true;  //  Эквивалентные типы можно
-
-    bool fromInt = isIntType(from);
-    bool toInt = isIntType(to);
-    bool fromFloat = isFloatType(from);
-    bool toFloat = isFloatType(to);
-
-    if ((fromInt || fromFloat) && (toInt || toFloat)) {
-        return true;
-    }
-    
-    if (fromInt && to->kind == TypeKind::Bool) {
-        return true;
-    }
-
-    if (from->kind == TypeKind::Bool && toInt) {
-        return true;
-    }
-
-    if (from->kind == TypeKind::Char && toInt) {
-        return true;
-    }
-
-    if (fromInt && to->kind == TypeKind::Char) {
-        return true;
-    }
-
-    if (from->kind == TypeKind::String && to->kind == TypeKind::Bool) {
-        return true;
-    }
-
-    if (from->kind == TypeKind::Bool && to->kind == TypeKind::String) {
-        return true;
-    }
-
-    return false;
-}
-
-//  Определяет общий тип для бинарной операции (к чему привести оба операнда)
-//  Например: int32 + int64 -> int64, int + float -> float64
-//  Возвращает nullptr если типы несовместимы
-static std::shared_ptr<Type> commonType(const std::shared_ptr<Type>& a, const std::shared_ptr<Type>& b) {
-    if (!a || !b) return nullptr;
-
-    if (typesEqual(a, b)) return a;  //  одинаковые — ничего приводить не надо
-
-    //  int/uint + float -> больший float-тип. Так int + float32 остаётся float32,
-    //  а всё с float64 расширяется до float64.
-    if ((isIntType(a) && isFloatType(b)) || (isFloatType(a) && isIntType(b))) {
-        if (a->kind == TypeKind::Float64 || b->kind == TypeKind::Float64) {
-            return makeType(TypeKind::Float64);
-        }
-        return makeType(TypeKind::Float32);
-    }
-
-    //  Оба float — берём больший
-    if (isFloatType(a) && isFloatType(b)) {
-        if (typeRank(a) >= typeRank(b)) return a;
-        return b;
-    }
-
-    //  Оба signed int — берём больший
-    if (isSignedIntType(a) && isSignedIntType(b)) {
-        if (typeRank(a) >= typeRank(b)) return a;
-        return b;
-    }
-
-    //  Оба unsigned int — берём больший
-    if (isUnsignedIntType(a) && isUnsignedIntType(b)) {
-        if (typeRank(a) >= typeRank(b)) return a;
-        return b;
-    }
-
-    //  Signed + unsigned: выбираем signed-тип, который может представить оба
-    //  диапазона. Для int64 + uint64 целого общего типа нет, поднимаем до float64.
-    if ((isSignedIntType(a) && isUnsignedIntType(b)) || (isUnsignedIntType(a) && isSignedIntType(b))) {
-        auto signedType = isSignedIntType(a) ? a : b;
-        auto unsignedType = isUnsignedIntType(a) ? a : b;
-        int signedBits = intBitWidth(signedType);
-        int unsignedBits = intBitWidth(unsignedType);
-        int commonBits = signedBits;
-
-        if (signedBits <= unsignedBits) {
-            commonBits = unsignedBits * 2;
-        }
-
-        if (commonBits <= 64) {
-            return makeType(signedIntKindForBits(commonBits));
-        }
-        return makeType(TypeKind::Float64);
-    }
-
-    return nullptr;  //  несовместимы 
-}
-
 std::shared_ptr<Type> SemanticAnalyzer::ensureVariableTypeKnown(const std::shared_ptr<Symbol>& sym, int line, int column) {
     if (!sym) {
         return nullptr;
@@ -2708,16 +2345,24 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
         }
 
         for (auto* v : var->vars) {
-            auto sym = table.resolveCurrentScope(v->name);
-            bool alreadyDeclared = false;
+            std::shared_ptr<Symbol> sym = nullptr;
+            bool needsDeclare = false;
 
-            if (sym && sym->kind == SymbolKind::Variable) {
-                alreadyDeclared = true;     //  Если уже была инициализация, то просто меняем значения у имеющейся записи
+            if (currentReturnType) {
+                sym = std::make_shared<Symbol>();   //  Внутри функции новое объявление всегда создаёт новый символ.
+                sym->name = v->name;                 //  Если имя уже есть в этом scope, новое объявление затеняет старое.
+                sym->kind = SymbolKind::Variable;
+                needsDeclare = true;
             }
             else {
-                sym = std::make_shared<Symbol>();   // Если не было - создаём экземпляр, потом запишем в таблицу
-                sym->name = v->name;
-                sym->kind = SymbolKind::Variable;
+                sym = table.resolveCurrentScope(v->name);   //  Верхний уровень и namespace используют предобъявленный символ.
+
+                if (!sym || sym->kind != SymbolKind::Variable) {
+                    sym = std::make_shared<Symbol>();
+                    sym->name = v->name;
+                    sym->kind = SymbolKind::Variable;
+                    needsDeclare = true;
+                }
             }
 
             sym->isConst = var->isConst;
@@ -2744,6 +2389,14 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
             }
             else {
                 sym->type = declaredType;
+
+                if (needsDeclare && currentReturnType) {
+                    auto result = table.declare(sym);
+                    if (!result) {
+                        error(stmt->line, stmt->column, result.error());
+                    }
+                    needsDeclare = false;
+                }
 
                 if (!v->init && var->isConst) {  //  Константа без явного инициализатора запрещена.
                     error(stmt->line, stmt->column, "const variable '" + v->name + "' requires an explicit initializer");
@@ -2775,8 +2428,8 @@ void SemanticAnalyzer::analyzeStmt(Stmt* stmt) {
                 }
             }
 
-            if (!alreadyDeclared) {
-                auto result = table.declare(sym);   //  Записываем наш экземпляр в таблицу
+            if (needsDeclare) {
+                auto result = table.declare(sym);   //  В локальном scope кладём новый символ поверх прежней привязки имени.
                 if (!result) {
                     error(stmt->line, stmt->column, result.error());
                 }
